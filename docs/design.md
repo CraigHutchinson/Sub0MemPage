@@ -386,3 +386,53 @@ learn to bridge to when adopting Sub0MemPage, but the same contract, repeated at
 
 Full sketch of what this looks like at the real consumer's actual call site: `sub0llm-consumer-trace.md`
 §2, revised alongside this section.
+
+## 9. Future scope — heterogeneous CPU/GPU/iGPU memory backends (proposed, not yet designed)
+
+Raised 2026-09-10, alongside §8's ownership-model resolution — recorded here as a **deliberate,
+documented future direction**, not a design commitment. No research pass has been done for this section
+yet; everything below is a scoping argument for *why it belongs in this project's charter*, not a spec.
+
+**The argument for including it, not spinning up a separate project**: §8's caller-owned-slot contract
+(`register_region`/`register_slots`/`prefetch`/`resolve`/`release`, a hard capacity fixed by the caller's
+own allocation, declared-vs-speculative admission) is not disk-specific in its shape — it is already
+modeled in part on CUDA Unified Memory's `cudaMemAdvise`/`cudaMemPrefetchAsync` (`prior-art.md` §1, the
+single most-cited precedent in this whole document), which solves the *identical* residency-hinting
+problem for CPU/GPU memory placement rather than disk-backed files. A GPU or iGPU backend under the same
+contract fills in a box this design already drew, rather than requiring a new one.
+
+**This is not speculative for Sub0Llm specifically — it is already live, independent work reinventing
+part of this vocabulary.** `Sub0Llm/docs/INTEL_IGPU_USM_CAPABILITY_SPIKE.md` is a real, in-progress
+research spike into Intel iGPU Unified Shared Memory (SYCL USM allocation aspects, Level Zero extension
+inventory), and its `prepare_for_device_copy`/`release_from_device_copy` pair (SYCL's own
+`SYCL_EXT_ONEAPI_COPY_OPTIMIZE` extension) is structurally the same "pin before use, release after" cycle
+as this project's own `resolve`/`release` — arrived at independently, for a different backend, by a
+different piece of the same project. Left unaddressed, Sub0Llm accumulates a second, independently-
+invented residency vocabulary rather than a second *backend* for one.
+
+**What genuinely differs across the candidate backends, stated honestly rather than glossed over** — this
+is NOT "one implementation, three flags":
+
+- **Local disk (the backend this project is currently designed against)**: data genuinely moves across a
+  storage bus; residency means "is it in DRAM at all."
+- **Discrete GPU (CUDA Unified Memory)**: data genuinely moves across PCIe/NVLink between distinct physical
+  memory pools; `cudaMemAdvise`'s `SET_PREFERRED_LOCATION`/`SET_ACCESSED_BY` are about *which* pool, not
+  just *whether* resident.
+- **Integrated GPU (Intel iGPU/USM, and analogous APUs)**: physical memory is frequently already shared
+  between CPU and GPU; "residency" there is closer to pinning against a coherency domain and avoiding an
+  unnecessary copy than to moving bytes at all — a materially different cost model from the other two.
+
+Each would be a genuinely distinct backend implementation, the same way this project's own Windows/Linux
+OS-mechanics split already is (§2, §8) — the value of including them under one project is the *shared
+contract and vocabulary* (budget semantics, admission classes, lease/pin lifecycle, observability), not a
+claim that one code path serves all three.
+
+**Naming**: no rename is proposed. "Page" is not disk-specific — it is the literal common addressing unit
+across CPU virtual memory, CUDA Unified Memory (which itself uses page-granular fault-driven migration),
+and iGPU/USM pages alike; broadening scope this way makes the name more apt, not less.
+
+**Explicitly not done by this section**: no API surface, no requirements, no prior-art research for GPU/
+iGPU-specific primitives (Level Zero, SYCL USM, `cudaMemAdvise`'s full advice set beyond what `prior-art.md`
+§1 already cites, AMD's HIP/ROCm equivalent) has been done yet. This section exists to record the scoping
+decision and its reasoning; a dedicated research-and-design pass (mirroring how §8's own ownership model
+was researched) is the next step if this direction is pursued.

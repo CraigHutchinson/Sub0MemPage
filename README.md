@@ -91,6 +91,12 @@ abstractions like Sub0Firn.
   `malloc` replacement. Its own internal allocations, if any, are limited to small bookkeeping metadata
   (slot-tracking tables), never the bulk data itself.
 
+**Not (yet) out of scope, deliberately**: heterogeneous CPU/GPU/iGPU memory backends — the residency
+contract above already reads on CUDA Unified Memory's own `cudaMemAdvise`/`cudaMemPrefetchAsync`
+precedent, and Sub0Llm's own Intel iGPU USM research is independently reinventing part of this project's
+pin/release vocabulary today. Recorded as a proposed future direction, not yet researched or designed —
+see `docs/design.md` §9.
+
 ## 2. How this relates to Sub0Firn
 
 Sub0Firn and Sub0MemPage are **two separate projects at two separate layers**, not the same thing under two
