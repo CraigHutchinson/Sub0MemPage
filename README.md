@@ -12,6 +12,8 @@ further down the stack.
 **Documentation map**:
 - [REQUIREMENTS.md](REQUIREMENTS.md) — the normative contract (R1–Rn), each a testable sentence.
 - [AGENTS.md](AGENTS.md) — pre-flight checklist for anyone (human or agent) implementing against this spec.
+- [docs/implementation-plan.md](docs/implementation-plan.md) — reviewed milestones and open API gates.
+- [docs/intel-usm.md](docs/intel-usm.md) — optional Intel diagnostic, commands and qualification evidence.
 - [STYLE_GUIDE.md](STYLE_GUIDE.md) — naming and code-style conventions.
 - [docs/](docs/) — reference material: [design.md](docs/design.md) (the full design rationale — read
   this for the "why," this README is the "what"), [prior-art.md](docs/prior-art.md) (real cited
@@ -134,7 +136,7 @@ library."* Sub0Llm's own MoE-expert sidecar cache (`sub0::moeq::Store`/`ExpertCa
 `include/sub0/moe_quant.hpp`) is the other concrete, already-real use case — see
 [docs/sub0llm-consumer-trace.md](docs/sub0llm-consumer-trace.md).
 
-## 3. API surface
+## 3. Planned API surface
 
 Given as an engine-agnostic contract, not C++ syntax — the style `Sub0Firn/README.md` §3 uses, and for
 the same reason: an implementation should render this faithfully into whatever binding surface it
@@ -184,7 +186,8 @@ prefetch(pool, ranges[], class) -> ticket
 wait(ticket, deadline?) -> outcome
     // Blocks the CALLING THREAD ONLY until every range named by that ticket's prefetch is resident in
     // its slot, or the deadline passes. `outcome` reports resident / partially-resident / declined per
-    // range -- "partially fail" is a documented platform outcome, not an exception here either.
+    // range. Completion alone does not lease a slot; acquire with resolve/try_resolve before reading.
+    // Batch failure/lifecycle details remain implementation-plan.md M1 gates.
 
 resolve(pool, ranges[], class) -> lease[]
     // Synchronous. For each range: hit-or-miss-then-fill-then-pin, as prefetch's miss path but

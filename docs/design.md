@@ -43,10 +43,9 @@ Status: **IMPLEMENTATION STARTED**, authorized 2026-09-10. The paging engine rem
 Grounding in the immediate consumer (`Sub0Llm/include/sub0/moe_quant.hpp`, `file_map.hpp`): the region is
 the ~37 GiB S0Q1 sidecar `moeq::Store` maps whole and read-only today; the ranges are `moeq::ByteRange` per
 `(layer, expert)` plane, already computed by existing code; the declared signal is the MoE router's top-k
-output, known before any expert byte is touched; the caller-owned destination pool is `ExpertCache`'s own
-already-allocated `pool_` array, registered via `register_slots` unchanged (§8, `sub0llm-consumer-trace.md`
-§2). `ExpertCache`'s current round-robin slot policy is exactly the naive replacement a Sub0MemPage-backed
-policy would supersede — and `file_map.hpp`'s own header comment already anticipates this, listing *"no
+output, known before any expert byte is touched; encoded staging needs a separately budgeted caller-owned
+pool (`sub0llm-consumer-trace.md` §2). `ExpertCache::pool_` holds decoded floats and retains its own
+replacement policy; Sub0MemPage manages the encoded staging slots — and `file_map.hpp`'s own header comment already anticipates this, listing *"no
 madvise/prefetch hints"* under a deliberately narrow scope with no consumer yet.
 
 ## 2. The calls, and why each shape was chosen
@@ -204,8 +203,8 @@ empirical study (§3 below) actually measured which one was real on this machine
 1. **Prefetch, not faster faults, is the top lever — by an order of magnitude.** The real decode workload
    runs the device at queue length 0.04–0.20 against a demonstrated 6.34 GB/s ceiling at queue length
    9-12. Every one of the real workload's per-token resolves is a *predictable* read (the router picks its
-   experts for layer L before layer L's FFN runs), so a design that issues layer L+1's reads while layer L
-   computes turns a blocking stall into overlapped work. Nothing else in this document is worth as much.
+   experts for layer L before layer L's FFN runs), so issuing known current-layer reads before consumption can overlap I/O and compute.
+   Layer L+1 keys are not known from layer L's routing; such read-ahead is speculative. Nothing else in this document is worth as much.
 2. **Explicit overlapped I/O beats mmap by 1.5-2.9x at matched concurrency, and ~1.47x on ceiling** — a
    real, local, measured argument for async-I/O-over-mmap, stated honestly as 1.5-2.9x, not as "mmap is
    the bottleneck." It is not, on this machine, at this scale.
@@ -262,12 +261,9 @@ scheduling detail, because it never asks them to build queue depth via faults in
 
 Carried in full from the source research, and deliberately not resolved by this design document:
 
-- **OQ1 — Windows demotion.** No documented Windows counterpart to `MADV_DONTNEED`/`MADV_PAGEOUT` for a
-  read-only file mapping was found. If none exists, budget *enforcement* on Windows — the first target
-  platform — may reduce to "stop prefetching and let the OS reclaim," materially weaker than the DPDK-style
-  hard cap §3 promises. Candidates to investigate: `VirtualUnlock`, `OfferVirtualMemory`,
-  `SetProcessWorkingSetSizeEx`, or unmapping/remapping sub-views. **Must be resolved before the hard budget
-  is claimed as a portable guarantee**, or REQUIREMENTS.md R14 is violated on day one.
+- **OQ1 — Windows demotion.** Still unresolved for the secondary mmap mode only. Primary
+  slot-capacity enforcement is bookkeeping and does not depend on OS demotion (R14). Neither mode
+  promises a total process working-set cap or physical page locking.
 - **OQ2 — `madvise` blocking semantics.** Not independently confirmed from a primary source. Re-verify
   before claiming `MADV_WILLNEED` is non-blocking on Linux.
 - **OQ3 — RESOLVED, 2026-09-10.** *Was*: hint the OS page cache (cheap, portable, the whole point of an
@@ -329,7 +325,8 @@ arguments converge here, not one:
    that "can completely or partially fail under low-memory conditions" — under this project's own real
    consumer's memory pressure (55+ GiB used of 63 GiB), a page warmed for layer L can be gone again before
    layer L+3 needs it. A caller-owned buffer, once filled, stays exactly as filled until the caller itself
-   releases the slot — a guarantee the mmap+hint path structurally cannot make on this platform.
+   releases the slot. This protects contents from reuse; pageable allocations can still fault.
+   Physical residency is not guaranteed by owning a buffer or by holding a lease.
 
 **(b) resolved: the caller owns and allocates all destination storage; Sub0MemPage never allocates bulk
 data.** Full reasoning and the four fresh High-confidence citations (io_uring registered buffers, POSIX
@@ -343,15 +340,11 @@ with (a): once the primary mode is an explicit async fill rather than a reactive
 being filled has to be a stable address *before* the read is issued — which a caller-owned buffer already
 is, and a library-internal allocation would need its own separate lifetime story to provide.
 
-**This is not new design — it is the general form of code the real consumer already wrote out of
-necessity.** Sub0Llm's `moeq::ExpertCache<Slots, SlotFloats>` (`include/sub0/moe_quant.hpp`, unchanged,
-already merged) already allocates and owns its own pool (`std::unique_ptr<float[]> pool_`, sized from its
-own compile-time-known constants), and its `resolve()` method today conflates two genuinely separate jobs:
-deciding which slot a `(layer, expert)` key belongs in and detecting a hit — pure bookkeeping, no content
-knowledge required — and faulting the raw bytes in, then dequantizing them into that slot — entirely
-content-aware, entirely Sub0Llm's own business. Sub0MemPage's job is exactly the first half, generalized to
-any caller-owned destination shape, plus scheduling the I/O that fills wherever the caller points it —
-never the second half, and never the allocation the caller already had a compile-time-sized answer for.
+**The caller-owned pool shape generalizes the real consumer, but its contents differ.**
+`ExpertCache::pool_` stores decoded/transposed floats. Sub0MemPage schedules raw encoded file bytes
+into separate staging slots; the caller then transforms them into its decoded cache. Its allocation,
+transform scratch, and the new staging allocation must all be budgeted. See the corrected consumer
+trace §2; adopting the library does not automatically replace the decoded cache's policy or keys.
 
 **What this changes in the call surface** (README.md §3, revised to match): a new `register_slots(region,
 slot_bytes, num_slots, slots_ptr) -> pool_handle` call registers the caller's own pre-allocated array of

@@ -17,12 +17,8 @@ if(SUB0MEMPAGE_BUILD_TESTING AND NOT IS_SUBPROJECT)
     enable_testing()
 endif()
 
-# Header-only, interface library -- the recommended first implementation shape, matching Sub0Firn's own
-# CMakeLists.txt precedent one layer up: no working implementation exists yet (README.md's status line),
-# so this target currently exposes only the design-skeleton header in include/. Grows a real compiled
-# component only once the disk/network async-I/O machinery needs background-thread infrastructure
-# substantial enough that header-only stops being the right packaging (docs/design.md sec 2's platform
-# seam -- Windows IOCP/PrefetchVirtualMemory, Linux io_uring -- is where that need would first appear).
+# The paging API remains a skeleton. Experimental executables are separate targets below;
+# their toolchain requirements never propagate to this dependency-free interface.
 add_library(Sub0MemPage INTERFACE)
 add_library(Sub0MemPage::Sub0MemPage ALIAS Sub0MemPage)
 
@@ -40,4 +36,10 @@ endif()
 
 if(SUB0MEMPAGE_BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
     add_subdirectory(examples)
+endif()
+
+# Tools are opt-in and never impose a SYCL dependency on the interface library.
+option(SUB0MEMPAGE_BUILD_INTEL_USM_SPIKE "Build the experimental Intel USM diagnostic" OFF)
+if(SUB0MEMPAGE_BUILD_INTEL_USM_SPIKE)
+    add_subdirectory(tools/intel_usm)
 endif()

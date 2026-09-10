@@ -1,0 +1,29 @@
+{
+  "schema": "sub0mempage.usm-qualification.v1",
+  "date": "2026-09-10",
+  "base_commit": "bd1fe757615022b43ce8e466a44ea4c925f256fc",
+  "source_sha256": {
+    "tools/intel_usm/usm_probe.cpp": "6fc7a9a1b8bcfe00f4dc5e6f96e8d950cca8adce2719e31364f360f4ebb11267",
+    "tools/intel_usm/CMakeLists.txt": "7bc104dc2c9e4d908bb4aeb89ada50362f7be8071adfe2220bd81b3bc7d2a3d0",
+    "tools/intel_usm/check_cli.cmake": "f5b175b8764348cfc0b840e02ddefef46c57c8fded1d621bbdda12dcb18e8edc"
+  },
+  "os": "Windows 10.0.26220",
+  "compiler": "IntelLLVM 2025.3.3",
+  "build": "CMake Ninja C++23 -fsycl",
+  "commands": [
+    "cmake --build build/intel-usm",
+    "ctest --test-dir build/intel-usm --output-on-failure",
+    "build/intel-usm/tools/intel_usm/sub0mempage-usm-probe.exe --copy-check",
+    "build/intel-usm/tools/intel_usm/sub0mempage-usm-probe.exe --device-id=ffffffff"
+  ],
+  "results": {
+    "build": 0,
+    "ctest": 0,
+    "copy_check": 0,
+    "missing_device": 1,
+    "checked_values": 2099200,
+    "mismatches": 0,
+    "linux": "not_qualified_no_cpp_compiler"
+  },
+  "executable_sha256": "60e1bdf92d041cae668caf9477b7c77358174e6302f9e0c26fdcfd8a257721f5"
+}

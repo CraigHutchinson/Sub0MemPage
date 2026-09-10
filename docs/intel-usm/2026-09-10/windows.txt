@@ -1,0 +1,23 @@
+schema=sub0mempage.intel-usm.v1
+device=Intel(R) Graphics
+backend=level_zero
+vendor_id=0x8086
+device_id=0x7d67
+driver=1.15.39183+3
+compiler=Intel(R) oneAPI DPC++/C++ Compiler 2025.3.3 (2025.3.3.20260319)
+usm_host=1
+usm_shared=1
+usm_device=1
+usm_system=0
+usm_atomic_host=0
+usm_atomic_shared=0
+prepared_copy_header=1
+prepared_copy_runtime=not_tested
+level_zero_extension_inventory=not_built
+mapped_pointer_kernel_access=not_tested
+copy_check_bytes=4096,pass=0,checked=1024,mismatches=0
+copy_check_bytes=4096,pass=1,checked=1024,mismatches=0
+copy_check_bytes=4194304,pass=0,checked=1048576,mismatches=0
+copy_check_bytes=4194304,pass=1,checked=1048576,mismatches=0
+copy_check=pass
+status=pass
