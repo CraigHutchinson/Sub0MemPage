@@ -131,6 +131,82 @@ Linux's is genuinely unknown (no Windows-side equivalent study was located) — 
 | **Linux MGLRU** | The single most load-bearing eviction-bookkeeping citation for this project's own API shape: the kernel does **not** ask anyone to report accesses — it reads hardware accessed bits in bulk, on its own schedule. Directly informs REQUIREMENTS.md R10 ("no per-access caller cooperation required"), because this project's real consumer is a hot loop that must call into the library zero times per access. | **Medium** |
 | **MoE-Infinity (arXiv:2401.14361)** | A genuinely useful **negative** finding, not smoothed over: its abstract describes *tracing* (learning) expert-activation sparsity statistically, not consuming a router's own declared foreknowledge. Even a system with full model access chose the inferred/reactive path over a declared one — worth knowing before assuming the declared/speculative split (R5) is an obviously-superior established pattern. | **Medium** |
 
+## 5a. Ownership model — who allocates the destination memory?
+
+A distinct axis from §5's call-shape research, and not resolved by it: when data moves from disk into
+memory, does the *library* own and hand back pointers into memory it allocated (a buffer-pool model), or
+does the *caller* allocate its own destination and the library only ever fills it (a registered-buffer/DMA
+model)? Researched directly, prompted by the ownership question this project's own scope line (R1 — "not
+content") already implies an answer to, but had not yet stated explicitly. Every citation below is a fresh
+fetch for this specific question, not reused from §5.
+
+**Caller-owns-the-buffer — every storage/transport precedent found takes this shape:**
+
+| System | Evidence | Confidence |
+|---|---|---|
+| **`io_uring` registered buffers** (`IORING_REGISTER_BUFFERS`/`IORING_REGISTER_BUFFERS2`) | *"_arg_ points to a _struct iovec_ array of _nr_args_ entries. The buffers associated with the iovecs will be locked in memory..."* — the application supplies pre-allocated memory; the kernel's role is to *"lock in memory and charge against the user's `RLIMIT_MEMLOCK`"* and create *"long term mappings of application memory"*, never to allocate the buffer itself. | **High** (man page, quoted) |
+| **POSIX `aio_read`** | The `aiocb` struct's `aio_buf` field carries a caller-supplied pointer — *"the buffer area being read into must not be accessed during the operation"*, i.e. the caller owns it, manages its lifetime, and must not touch it mid-flight. The kernel never allocates it. | **High** (man page) |
+| **NVIDIA GPUDirect Storage (`cuFile`)** | Explicit and unambiguous: *"Allocate GPU memory with `cudaMalloc`, `cudaMallocManaged`, `cuMem*` APIs or host memory using `cudaMallocHost`, `malloc` or `mmap`."* … *"cuFile relies on users to complete their own allocation before using the `cuFileBufRegister` API and free after using the `cuFileBufDeregister` API."* `cuFileRead`/`cuFileWrite` move bytes into/out of a buffer the caller allocated and registered; the library never allocates the destination. The domain here — bulk file reads landing directly in a compute buffer ahead of a GPU kernel — is the closest single precedent to this project's own real consumer (a bulk expert-plane read landing in a buffer ahead of `expert_ffn_row`). | **High** (docs, quoted) |
+| **Microsoft DirectStorage** | *"DirectStorage removes this issue by mapping the title-provided destination buffer directly into each pipeline layer. The hardware will write directly into the buffer that's provided by the title."* The request struct's `Destination` field is explicitly *"the destination buffer for the final loaded data"* — always caller-provided, never library-allocated (the physical-pages variant `DestinationPageArray` is a caller-supplied array too). Its own best-practices section goes further and names the anti-pattern directly: *"Does each request require the allocation of a new memory block? ... Consider reusing memory blocks as much as possible."* — a title that allocates fresh memory per request is doing it wrong; a small number of caller-owned slots, reused across requests, is the recommended shape. | **High** (docs, quoted) |
+| **RDMA memory registration** (`ibv_reg_mr`) | Structural evidence rather than an explicit prose statement (the fetched man page describes the registration process but does not state allocation responsibility in prose): the signature is `ibv_reg_mr(struct ibv_pd *pd, void *addr, size_t length, int access)` — `addr`/`length` name an already-existing region the caller passes in; the function *registers* it with the NIC, it does not allocate it. Consistent with universal RDMA practice (register-then-transfer, never allocate-and-return), but the specific prose confirmation was not retrieved this pass. | **Medium** (structural; prose not independently confirmed) |
+
+**Library-owns-the-pool — the caching/buffer-pool precedents already in §5 above, presented here as the
+contrasting model:**
+
+| System | Evidence | Confidence |
+|---|---|---|
+| **PostgreSQL shared_buffers** | The server allocates and owns a fixed shared-memory region at startup; a backend process gets a *pinned `Buffer` handle* referencing the server's own memory, never memory it supplied itself. | **Medium** (well-established, not re-fetched this pass) |
+| **RocksDB block cache** | Owns block memory itself; callers get a `PinnableSlice`/cache handle referencing the cache's own allocation. | **Medium** |
+| **Redis / Caffeine** | Both own their entire heap of cached entries; a caller never supplies the memory an entry is stored in. | **High**/**Medium** (§5c, §5b above) |
+| **DPDK `rte_mempool`** | A hybrid worth naming precisely: the *pool itself* is library-allocated at creation (`rte_mempool_create`), but individual *objects* are then borrowed and returned via `rte_mempool_get`/`_put` — closer to "library owns a slab, hands out fixed-size objects from it" than either pure model. Discussed further below, because this is closer to what this project's own real consumer already does today. | **Medium** (§4a above) |
+
+**Resolution for this project — caller-owned, and it is not a new design, it is the general form of code
+the real consumer already independently wrote.** Sub0Llm's own `moeq::ExpertCache<Slots, SlotFloats>`
+(`include/sub0/moe_quant.hpp`, unchanged, already merged) is a hand-written instance of exactly the DPDK
+hybrid shape above: Sub0Llm allocates and owns the pool's backing storage (`std::unique_ptr<float[]>
+pool_`, sized by its own compile-time-known `SlotFloats`/`PerExpert` constants — content Sub0MemPage must
+never know, per R1), and its `resolve()` method today does two jobs conflated into one: (a) decide which
+slot a `(layer, expert)` key belongs in and detect a hit (pure bookkeeping — no content knowledge needed),
+and (b) fault the raw bytes in from the mapping and dequantize them into that slot (content-aware, stays
+entirely Sub0Llm's). Sub0MemPage's job, cleanly separated, is exactly (a) generalized to any caller-owned
+slot shape, plus scheduling the I/O that fills whichever destination the caller names — never (b), and
+never the allocation the caller already had a compile-time-sized answer for before Sub0MemPage existed.
+Concretely (`docs/sub0llm-consumer-trace.md` has the full sketch): `ExpertCache::pool_` is registered once
+via `register_slots(region, slot_bytes, num_slots, pool_.get())`, and `resolve(pool, ranges[], class) ->
+lease[]` fills the slot Sub0MemPage's own bookkeeping selected, rather than returning a pointer into
+library- or OS-mapping-owned memory; the *filling* mechanism underneath (explicit overlapped/`io_uring`
+read directly into that slot, or — on a platform/region where §5's fault-based path
+is deliberately kept as the OQ3-secondary opportunistic mode — a `memcpy` out of a live mapping) is
+Sub0MemPage's own implementation detail, invisible to the caller either way.
+
+**Why this is the right fit for this project specifically, not just the majority precedent:**
+
+1. **It keeps R1 airtight.** A library that allocates its own typed destination storage has to know that
+   storage's size and shape — which means knowing something about content, the one thing R1 says this
+   project must never touch. A library that only ever fills a caller-supplied `void*`/byte-range never
+   needs to know what a "slot" or "plane" means; every precedent in the caller-owns-buffer table above
+   (`iovec`, `aio_buf`, a `void*` GPU pointer, a `DSTORAGE_REQUEST::Destination`) is exactly this
+   content-blind shape.
+2. **It matches this whole project family's own standing engineering discipline.** Sub0Llm's codebase
+   avoids runtime heap allocation on hot paths as a matter of course (`AGENTS.md` §1; every arena, every
+   pool, every cache in the engine is sized at configure/compile time). A Sub0MemPage that secretly
+   allocated its own bulk memory internally (the DPDK/Redis/RocksDB shape) would be introducing exactly
+   the kind of runtime allocation this project's own real consumer has spent this whole engineering effort
+   eliminating everywhere else — and would sit awkwardly beside `ExpertCache`'s own already-compile-time-
+   sized pool rather than complementing it.
+3. **It converges cleanly with §OQ3's resolution** (`docs/design.md` §5/§7): once the primary hot-path
+   mode is "explicit async read into an owned destination, never a reactive fault," the destination that
+   gets filled has to be something with a known, stable address before the read is issued — which is
+   precisely a caller-owned buffer. A library that owned the pool internally and *also* wanted to bypass
+   the fault path would need to expose pointers into its own internal allocation for the caller to treat
+   as stable across an async fill, which is a strictly harder lifetime problem than "the caller already
+   has a pointer to memory it owns."
+4. **It is a *better* fit for `Sub0Firn`'s own contract than the alternative would have been**
+   (`sub0firn-reconciliation.md` D2): Sub0Firn's `resolve_into` already copies into a caller-owned buffer
+   today. Under this resolution, Sub0MemPage's `resolve` has *the same shape* Sub0Firn's `resolve_into`
+   already has, one layer down — not a new concept Sub0Firn has to learn to bridge to, but the same
+   contract repeated at the layer beneath it.
+
 ## 6. Where the evidence is thin, or disagrees — stated honestly, not smoothed over
 
 1. **Whether concurrent hard faults on *different* pages of the *same* Windows section object serialize
@@ -156,7 +232,15 @@ Linux's is genuinely unknown (no Windows-side equivalent study was located) — 
    read workload three orders of magnitude larger per unit.
 8. **§3c/§5's PostgreSQL history and this project's own `mmap`-is-the-right-substrate framing point in
    mildly opposite directions** on the central architectural question (hint the page cache vs. own a
-   private buffer pool) — the resolution offered (`docs/design.md` OQ3) is reasoning, not a cited finding.
+   private buffer pool) — RESOLVED in `docs/design.md` §5/§7 (OQ3), decided in favor of owning a
+   caller-supplied buffer pool with direct async reads as the primary, hot-path-safe mode, with B21's own
+   measured production defect as the deciding tie-breaker beyond the PostgreSQL precedent alone. The mmap
+   fault path remains an available secondary, opportunistic mode for callers that explicitly accept its
+   weaker guarantees.
+9. **The RDMA (`ibv_reg_mr`) row in §5a rests on the function signature, not an explicit prose statement**
+   — the fetch did not return text characterizing allocation responsibility in words, only the struct/
+   argument shape. Tagged Medium accordingly; the conclusion does not depend on this one row (four other,
+   High-confidence, explicitly-worded citations already establish the caller-owns-the-buffer pattern).
 
 ## 7. This machine's own empirical measurement — where the real bottleneck actually is
 

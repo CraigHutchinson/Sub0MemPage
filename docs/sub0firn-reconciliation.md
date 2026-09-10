@@ -34,8 +34,9 @@ indices; Sub0MemPage sits one level below that and receives already-computed byt
 existing `local_flat_file(path)` descriptor — "rows at `row_index * row_width_bytes`, `mmap`'d" — is
 *already* a row→offset function, and its `local_sharded(shard_paths[], offset_resolver_callback)`
 descriptor is already the general form. So a Sub0Firn built on Sub0MemPage keeps its R7 offset-resolver
-contract exactly as written and simply calls `prefetch(region, resolved_ranges)` instead of implementing
-paging itself.
+contract exactly as written and simply calls `prefetch(pool, resolved_ranges)` — against a pool it
+registered once over its own RAM tier's backing storage (D3, below) — instead of implementing paging
+itself.
 
 **No Sub0Firn requirement changes.**
 
@@ -49,24 +50,36 @@ only because Sub0Firn's RAM tier is a private, never-evicted-mid-use structure. 
 dangling-view hazard the moment that tier is a budget-enforced region that can reclaim pages under
 pressure — which is precisely what a Sub0MemPage-backed RAM tier would be.
 
-Sub0MemPage hands back pointers *into a live mapping under active eviction pressure*, so residency
-lifetime must be explicit, or it is a use-after-evict bug waiting to happen.
+Sub0MemPage hands back a lease naming a slot under active reuse pressure (R8, R14 — updated 2026-09-10:
+Sub0MemPage's ownership model resolved to caller-owned destination slots, `docs/design.md` §8, rather than
+pointers into a library- or OS-managed mapping), so residency lifetime must be explicit, or it is a
+use-after-reuse bug waiting to happen.
 
-**Reconciliation, and it is clean**: `resolve_into` (copy semantics) is trivially implementable on top of
-`resolve` + `memcpy` + `release`, so Sub0Firn's own contract can stay exactly as written; and if Sub0Firn
-ever wants zero-copy `try_get` to be genuinely safe under a real budget, the lease is the mechanism that
-makes it so. **Adopting Sub0MemPage would close an existing latent hole in Sub0Firn's own spec, not open
-a new one.**
+**Reconciliation, and it is now even cleaner than the original draft found it**: `resolve_into` (copy
+semantics) is trivially implementable on top of `resolve` + `memcpy` + `release`, so Sub0Firn's own
+contract can stay exactly as written — and this is no longer merely an implementation convenience.
+Sub0MemPage's own `resolve` now fills a *caller-owned* destination and hands back a lease over it, which is
+literally the same shape `resolve_into` already has, one layer down (`docs/design.md` §8's own note): a
+Sub0Firn RAM tier built on Sub0MemPage would find `resolve_into` isn't bridging to a foreign concept at
+all, it is passing its own contract straight through to the layer beneath it. If Sub0Firn ever wants
+zero-copy `try_get` to be genuinely safe under a real budget, the lease is still the mechanism that makes
+it so. **Adopting Sub0MemPage would close an existing latent hole in Sub0Firn's own spec, not open a new
+one — and the ownership-model resolution makes the fit tighter than the original reconciliation pass
+found, not looser.**
 
 ## D3 — A hard budget, exposed and enforced
 
 Sub0Firn's README describes tiers a caller "configures per deployment" but names no budget parameter in
-its own §3 contract and no exhaustion behavior. Sub0MemPage makes `budget_bytes` a `register_region`
-parameter with a documented failure mode (REQUIREMENTS.md R7).
+its own §3 contract and no exhaustion behavior. Sub0MemPage makes the hard cap a structural property of
+`register_slots`' `num_slots * slot_bytes` (REQUIREMENTS.md R7, updated 2026-09-10 alongside the
+ownership-model resolution — `docs/design.md` §8) rather than a separate `budget_bytes` number Sub0MemPage
+must be told and then police against memory it owns.
 
-**Additive, and it maps straight onto a number a Sub0Firn deployment already has to pick** when sizing its
-RAM tier — the natural suggestion is that Sub0Firn's own RAM-tier size becomes a Sub0MemPage region budget
-verbatim, rather than a second, separately-tracked number.
+**Additive, and it now maps even more directly onto a decision a Sub0Firn deployment already has to make**
+when sizing its RAM tier: Sub0Firn already has to allocate that tier's backing storage somewhere; under
+this resolution, that same allocation *is* the Sub0MemPage pool's budget, registered once via
+`register_slots`, rather than a size Sub0Firn allocates and a separate number it also tells Sub0MemPage to
+enforce.
 
 ## D4 — `wont_need` and `on_evict` have no Sub0Firn counterpart
 

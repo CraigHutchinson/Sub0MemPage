@@ -43,37 +43,54 @@ narrow scope with no consumer yet.
 ## 2. The calls, and why each shape was chosen
 
 The full call-by-call contract is in [README.md](../README.md) §3; this section is the *reasoning* behind
-each shape, not a restatement of the contract.
+each shape, not a restatement of the contract. Signatures below reflect the ownership-model resolution in
+§8 (caller-owned slot pools) — read §8 first if the `pool`/`register_slots` shapes below look unmotivated;
+this section explains each call's *own* reasoning assuming that resolution, not why the resolution itself
+was made.
 
-**`register_region` takes a hard `budget_bytes` and a *standing* `policy_hints`, never re-issued on a hot
-path.** This is CUDA's own composition rule, generalized: `cudaMemAdvise` sets a *standing* policy on a
-range once ("this is read-mostly", "this processor will touch it"); `cudaMemPrefetchAsync` is a *one-shot*
-"move it now, in the background," issued thousands of times. Collapsing the two into one call would force
-a per-region standing decision through the hot path every time it needs restating. `budget_bytes` follows
-DPDK's `rte_mempool` precedent — a hard, declared, creation-time number, not Redis's soft `maxmemory`
-ceiling — because a library whose entire reason to exist is fitting a huge file into a real, finite RAM
-budget cannot afford "approximately respected" (`prior-art.md` §5).
+**`register_region` names an addressable source and a *standing* `policy_hints`, never re-issued on a hot
+path — and carries no budget.** The standing-vs-per-invocation split is CUDA's own composition rule,
+generalized: `cudaMemAdvise` sets a *standing* policy on a range once ("this is read-mostly", "this
+processor will touch it"); `cudaMemPrefetchAsync` is a *one-shot* "move it now, in the background," issued
+thousands of times. Collapsing the two into one call would force a per-region standing decision through the
+hot path every time it needs restating. Budget lives on `register_slots` instead (§8) — once the caller
+owns the destination memory, the budget is simply how much of it the caller allocated, not a separate
+number Sub0MemPage must be told and then police against a pool it doesn't own.
+
+**`register_slots` takes the caller's own pre-allocated array and a uniform slot size, and that allocation
+size IS the hard budget.** Follows DPDK's `rte_mempool` precedent — a hard, declared, creation-time number,
+not Redis's soft `maxmemory` ceiling — but goes one step further than the original draft: DPDK's pool is
+still library-allocated internally; here, the *caller's own allocation* is the pool, and Sub0MemPage's role
+narrows to bookkeeping over it (`prior-art.md` §5a, §8 below). A library whose entire reason to exist is
+fitting a huge file into a real, finite RAM budget cannot afford "approximately respected" — and cannot
+afford to own memory it has no business knowing the shape of either (R1).
 
 **`prefetch` is batch-shaped from the start, never blocks, and returns an optional ticket.** Batch-shaped
 because Windows' own `PrefetchVirtualMemory` takes an array of discontiguous ranges in one call for
 exactly this reason — *"the API will efficiently bring in those address ranges from disk using large,
 concurrent I/O requests where possible"* — and because the real consumer's own access shape is "these ~10
-scattered expert planes for this token," one call, not ten (`prior-art.md` §1). The ticket is optional
-because a caller that will never wait may discard it and pay nothing — but it exists at all because
-Windows itself returns only a bare `BOOL` and CUDA returns nothing at all for its advice calls, and a
-library that owns its own budget bookkeeping can do better: it knows exactly which ranges it declined and
-can say so (`prior-art.md` §5, RocksDB's `SubmitReadAsync` — *"returns true for a non-blocking submission
-and false when it used the synchronous fallback"* — is the direct precedent for reporting honestly rather
-than staying silent).
+scattered expert planes for this token," one call, not ten (`prior-art.md` §1). Each miss claims a
+caller-owned slot and fills it directly, in the DirectStorage sense — *"the hardware will write directly
+into the buffer that's provided by the title"* (`prior-art.md` §5a). The ticket is optional because a
+caller that will never wait may discard it and pay nothing — but it exists at all because Windows itself
+returns only a bare `BOOL` and CUDA returns nothing at all for its advice calls, and a library that owns
+its own budget bookkeeping can do better: it knows exactly which ranges it declined and can say so
+(`prior-art.md` §5, RocksDB's `SubmitReadAsync` — *"returns true for a non-blocking submission and false
+when it used the synchronous fallback"* — is the direct precedent for reporting honestly rather than
+staying silent).
 
-**`resolve` is the one call that may synchronously block, and it PINS.** Two distinct real needs collapse
-into one call: the recovery path for "the hint wasn't given in time," and the correct call for a caller
-with no useful look-ahead at all. Pinning exists because Sub0MemPage hands back pointers *into a live
-mapping under active eviction pressure* — a fundamentally different hazard than Sub0Firn's own two read
-paths, which both sidestep the lifetime question (`resolve_into` copies; `try_get`'s zero-copy view has no
-documented lifetime rule at all, invisible today only because Sub0Firn's RAM tier is not yet
-budget-managed). See `sub0firn-reconciliation.md` D2 for the full argument that adopting Sub0MemPage would
-*close*, not open, this gap.
+**`resolve` is the one call that may synchronously block, and it PINS a caller-owned slot, not a
+library-owned one.** Two distinct real needs collapse into one call: the recovery path for "the hint
+wasn't given in time," and the correct call for a caller with no useful look-ahead at all. Pinning exists
+because Sub0MemPage hands back a lease naming a slot *the caller allocated*, but whose content Sub0MemPage
+is actively managing (filling, potentially reusing for a different range once released) — a fundamentally
+different hazard than Sub0Firn's own two read paths, which both sidestep the lifetime question
+(`resolve_into` copies; `try_get`'s zero-copy view has no documented lifetime rule at all, invisible today
+only because Sub0Firn's RAM tier is not yet budget-managed). Under this resolution, `resolve`'s shape is
+now the *same* shape `resolve_into` already has — a call that fills a caller-owned destination and hands
+back something the caller can safely use until it explicitly releases it — not a new concept Sub0Firn's
+maintainer has to learn. See `sub0firn-reconciliation.md` D2 for the full argument that adopting Sub0MemPage
+would *close*, not open, the gap `try_get`'s own undocumented lifetime rule leaves today.
 
 **`try_resolve` is deliberately pure — it never starts I/O on a miss.** RocksDB's own `TryAgain()` retry
 protocol starts the read on the failed probe (`prior-art.md` §5); this design deliberately does the
@@ -239,13 +256,17 @@ Carried in full from the source research, and deliberately not resolved by this 
   is claimed as a portable guarantee**, or REQUIREMENTS.md R13 is violated on day one.
 - **OQ2 — `madvise` blocking semantics.** Not independently confirmed from a primary source. Re-verify
   before claiming `MADV_WILLNEED` is non-blocking on Linux.
-- **OQ3 — The central architectural fork**: hint the OS page cache (cheap, portable, the whole point of an
+- **OQ3 — RESOLVED, 2026-09-10.** *Was*: hint the OS page cache (cheap, portable, the whole point of an
   mmap design) versus manage a private buffer pool with direct async reads (PostgreSQL's own chosen
-  direction after ~15 years of the former). This design's own reading is that PostgreSQL's reason (a) — the
-  extra copy from page cache to private buffers — does not apply to a mapped region (a page-cache hint
-  lands directly in the consumer's own address space here), while reason (b) — insufficient control over
-  kernel heuristics — does. That is reasoning, not a finding, and it is the single decision that most
-  determines what Sub0MemPage actually is.
+  direction after ~15 years of the former). *Now*: resolved in favor of the latter as the **primary,
+  hot-path-safe mode** — see §8 below for the full reasoning and the fresh prior-art (`prior-art.md` §5a).
+  The deciding evidence beyond the PostgreSQL precedent alone is this project's own B21 finding (§6): the
+  real production consumer's reactive-fault-based design measurably does not achieve the concurrency an
+  identical, architecturally-correct isolated test achieves on the same file, same OS, same machine — a
+  first-party demonstration that "the OS page cache is the buffer pool" cannot be trusted to deliver
+  controllable concurrency on this platform, not just PostgreSQL's own stated 15-year-old reasoning for
+  moving away from it. The OS mmap fault path is kept as an explicitly secondary, opportunistic mode (§8),
+  not removed — a caller that accepts its weaker guarantees may still use it.
 - **OQ4 — DPDK hugepages** relative to mempool allocation: not retrieved. Relevant if Sub0MemPage ever
   wants large-page-backed regions.
 - **OQ5 — Caffeine's frequency-sketch aging/reset step**: not retrieved. Redis independently establishes
@@ -262,3 +283,92 @@ Carried in full from the source research, and deliberately not resolved by this 
   Windows-side equivalent of the CIDR 2022 study was located, and this project's own empirical study
   measured throughput scaling (which refutes H2 as a bottleneck at this scale) without measuring the lock
   mechanism directly.
+
+## 8. Ownership model — caller-owned destination buffers, resolved 2026-09-10
+
+Two scope decisions, made together because they turned out to be the same decision seen from two angles:
+**(a)** should the hot-path-safe mechanism be OS-reactive mmap paging, hinted, or self-managed pinned
+scratch with explicit async fill (OQ3, above)? **(b)** who allocates that scratch — Sub0MemPage, or the
+caller? Full prior-art trail in `prior-art.md` §5a; this section states the resolution and the reasoning
+for *this* project specifically.
+
+**(a) resolved: self-managed pinned scratch, explicitly filled ahead of the hot loop, is the primary
+mode.** OS-reactive mmap paging — even hinted via `PrefetchVirtualMemory` — remains available as a
+secondary, opportunistic mode, but is no longer the design's default assumption. Three independent
+arguments converge here, not one:
+
+1. **B21, directly.** Sub0Llm's real `ParallelExperts` already does the "many threads independently fault
+   a shared mapping" thing this design originally leaned on, on this exact machine, this exact file, this
+   exact OS — and it measurably does not build the concurrency an architecturally-identical isolated test
+   achieves (§6, above). A design that depends on the reactive fault path delivering controllable
+   concurrency is depending on something this project has now watched fail to deliver it, in production,
+   more than once.
+2. **PostgreSQL's own 15-year arc** (`prior-art.md` §3c/§5): hint the kernel via `fadvise`, discover the
+   heuristics aren't controllable enough, move to owning async I/O directly. This project's original OQ3
+   reasoning noted PostgreSQL's *other* stated reason (the page-cache-to-private-buffer copy) doesn't apply
+   here because Sub0MemPage's regions are mapped — but that reasoning quietly assumed the destination would
+   still be *inside* the mapping. Once ownership (b) is resolved caller-owned, the copy PostgreSQL was
+   avoiding doesn't reappear either: a caller-owned scratch slot that was never inside the OS mapping in the
+   first place has no "second copy" to avoid, because there was only ever going to be one.
+3. **Windows offers no real pinning guarantee for a read-only file mapping at all.** OQ1 is not a footnote
+   here: `PrefetchVirtualMemory` explicitly does not add pages to the working set and is a "strong hint"
+   that "can completely or partially fail under low-memory conditions" — under this project's own real
+   consumer's memory pressure (55+ GiB used of 63 GiB), a page warmed for layer L can be gone again before
+   layer L+3 needs it. A caller-owned buffer, once filled, stays exactly as filled until the caller itself
+   releases the slot — a guarantee the mmap+hint path structurally cannot make on this platform.
+
+**(b) resolved: the caller owns and allocates all destination storage; Sub0MemPage never allocates bulk
+data.** Full reasoning and the four fresh High-confidence citations (io_uring registered buffers, POSIX
+`aio_read`, NVIDIA GPUDirect Storage `cuFile`, Microsoft DirectStorage — every storage/transport precedent
+researched takes this shape) are in `prior-art.md` §5a. The short version: it keeps R1 ("not content")
+airtight — a library that allocates its own typed destination has to know that destination's size and
+shape, which is content knowledge this project's scope line says it must never have; a library that only
+ever fills a caller-supplied `void*`/byte-range never needs to know what a "slot" means. It also matches
+this whole project family's own standing no-runtime-allocation-on-hot-paths discipline, and it converges
+with (a): once the primary mode is an explicit async fill rather than a reactive fault, the destination
+being filled has to be a stable address *before* the read is issued — which a caller-owned buffer already
+is, and a library-internal allocation would need its own separate lifetime story to provide.
+
+**This is not new design — it is the general form of code the real consumer already wrote out of
+necessity.** Sub0Llm's `moeq::ExpertCache<Slots, SlotFloats>` (`include/sub0/moe_quant.hpp`, unchanged,
+already merged) already allocates and owns its own pool (`std::unique_ptr<float[]> pool_`, sized from its
+own compile-time-known constants), and its `resolve()` method today conflates two genuinely separate jobs:
+deciding which slot a `(layer, expert)` key belongs in and detecting a hit — pure bookkeeping, no content
+knowledge required — and faulting the raw bytes in, then dequantizing them into that slot — entirely
+content-aware, entirely Sub0Llm's own business. Sub0MemPage's job is exactly the first half, generalized to
+any caller-owned destination shape, plus scheduling the I/O that fills wherever the caller points it —
+never the second half, and never the allocation the caller already had a compile-time-sized answer for.
+
+**What this changes in the call surface** (README.md §3, revised to match): a new `register_slots(region,
+slot_bytes, num_slots, slots_ptr) -> pool_handle` call registers the caller's own pre-allocated array of
+destination slots, and `prefetch`, `resolve`, and `try_resolve` operate over that `pool_handle` rather than
+over `region` directly — `resolve(pool, ranges[], class) -> lease[]`, not `resolve(region, ranges[], class)
+-> lease` returning a library-owned pointer. A pool of exactly one slot degenerates to the simpler
+"one destination per call" shape every other precedent researched uses (`prior-art.md` §5a) — not a second
+API family. `register_region`'s own role narrows to naming the addressable *source* (a file, or a caller-
+supplied mapping used only for the OQ3-secondary opportunistic path); it carries no budget of its own —
+the caller's `register_slots` allocation size IS the budget (R7). The `lease[]` returned by
+`resolve`/`try_resolve` now
+marks "this caller-owned destination is validly filled with exactly this byte range's content," not "here
+is a pointer into memory the library owns" — a lease over a caller's own memory rather than over the
+library's, but still the thing `release` un-pins and still the thing that is never evicted while held
+(R8 is unaffected in substance, only in whose memory it protects).
+
+**Consequence for §1's "every range is always legally readable" guarantee**: that guarantee now applies
+specifically to the OQ3-secondary opportunistic mmap mode, where a live mapping genuinely exists and a
+caller may dereference it without calling into Sub0MemPage at all. Under the primary caller-buffer mode,
+there is no mapping for the caller to legally dereference ahead of a `resolve`/`wait` — the caller's
+destination buffer is only valid after that call completes, exactly the same contract every precedent in
+`prior-art.md` §5a already has (an `aiocb`'s `aio_buf`, a `DSTORAGE_REQUEST::Destination`, a `cuFile`-
+registered pointer are all only valid once the operation they're tied to completes). This is not a
+weakened guarantee relative to those precedents — it is the same one they all make — but REQUIREMENTS.md
+R2 needs its wording narrowed to state which mode it covers, rather than reading as a universal claim.
+
+**A pleasant, unplanned convergence with `Sub0Firn`**: `sub0firn-reconciliation.md` D2 already noted that
+Sub0Firn's own `resolve_into` copies into a caller-owned buffer today, while `try_get`'s zero-copy path has
+an undocumented lifetime rule. Under this resolution, Sub0MemPage's own primary `resolve` call has *the
+same shape* `resolve_into` already has, one layer down — not a new concept Sub0Firn's maintainer has to
+learn to bridge to when adopting Sub0MemPage, but the same contract, repeated at the layer beneath it.
+
+Full sketch of what this looks like at the real consumer's actual call site: `sub0llm-consumer-trace.md`
+§2, revised alongside this section.
