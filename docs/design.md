@@ -258,6 +258,40 @@ capping `ParallelExperts` in production, because a proactive/async design that n
 by construction — it does not need ten threads to cooperate correctly with an undocumented kernel
 scheduling detail, because it never asks them to build queue depth via faults in the first place.
 
+### 6a. B23 — the cheap alternative (just warm the whole file once) was tested directly, and ruled out by arithmetic
+
+Filed 2026-09-10 in `Sub0Llm/docs/INDEPENDENT_REVIEW_BACKLOG.md` as **B23**, prompted by a direct question
+worth asking before committing further to this project's own async-scheduling build: is there a much
+simpler fix — touch the whole sidecar once at startup and let the OS page cache hold it? **Tested, and
+the answer sharpens this project's own target rather than replacing it.**
+
+A standalone probe sequentially touched every page of the real 37.11 GiB sidecar once (27.3s, 1459 MB/s —
+itself evidence that sequential single-threaded readahead beats the fragmented small-plane pattern decode
+uses by roughly an order of magnitude). Real decode launched immediately after showed **no improvement at
+all**: disk queue depth 0.10–0.17 (matching or exceeding the 0.04–0.09 cold baseline), throughput 5.60
+s/token (within the existing 5.53–5.85 s/token band), and `\Memory\Available MBytes` falling continuously
+throughout decode rather than plateauing. **`\Memory\Pages Output/sec` measured exactly 0.00 throughout —
+this is not pagefile swap.** It is standby-list churn on the cheapest-to-evict, read-only, file-backed
+mapping (§5's H3, previously estimated a "contributory ~9-12%" effect; this result shows it dominates at
+this scale).
+
+**The root cause is simple, measured arithmetic, not a caching-cleverness gap**: available memory before
+model load was 42.71 GiB of 63.43 GiB total RAM on this real, shared machine (≈20.72 GiB already committed
+to the OS/other processes at baseline); the backbone+worker arena commit 25.39 GiB; that leaves **17.32
+GiB of headroom for a 37.11 GiB sidecar — at most 46.7% of it can be simultaneously resident, regardless
+of implementation.** The other ~53% must be re-fetched from disk on essentially every routing pattern that
+touches it, by construction, on this machine's real memory budget.
+
+**Consequence for how this project should describe its own goal**: not "eliminate the sidecar's disk I/O"
+(B23 shows this is structurally impossible at this machine's memory budget, no matter how clever the
+caching), but "efficiently overlap unavoidable I/O with compute" — the router's own declared-ahead-of-use
+signal (§8, R5) is exactly what makes that overlap possible. Success for a real implementation should be
+measured as reduced I/O-idle time / increased compute-I/O overlap, not as reduced total bytes read from
+disk, which B23 shows has a hard floor near 53% of the sidecar per full routing sweep here. This is a
+machine-specific number (a dedicated inference box with less competing baseline load, or more RAM, would
+shift it), but the qualitative conclusion — full residency is impossible without more RAM, independent of
+software — is not.
+
 ## 7. Open questions — a living list, not resolved
 
 Carried in full from the source research, and deliberately not resolved by this design document:
