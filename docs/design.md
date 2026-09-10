@@ -14,31 +14,40 @@ used (and that Sub0Llm's own architecture docs established before it).
 
 ## 1. Scope line, stated precisely
 
-**Sub0MemPage owns *residency*, not *addressing* and not *content*.**
+**Sub0MemPage owns *residency*, not *addressing*, not *content*, and never allocates bulk data storage
+(R1, R9 — see §8 for the full ownership-model resolution this section is written to already assume).**
 
-- A **region** is a contiguous virtual address range backed by a file (or a caller-supplied mapping). The
-  region's *virtual* mapping exists for the region's whole lifetime and is never partially unmapped; what
-  Sub0MemPage manages is which of its pages are *physically resident*, and when.
-- The unit of every call is a **byte range within a region**, page-granular. Sub0MemPage has no concept of
-  a row, a table, an index, a dtype, or a version. Translating `(table_id, row_index)` or `(layer,
-  expert)` into a byte range is entirely the consumer's job — the same boundary Sub0Firn already draws in
-  its own R7 offset-resolver callback, viewed from underneath it.
-- **Every range is always legally readable.** Following CUDA's *"accesses to this range are always
-  coherent and are allowed even when the data is actively being migrated"* and Windows' *"prefetching is
-  not necessary for accessing the target address ranges"* (`prior-art.md` §1, §5): a caller may
-  dereference any address in a registered region at any time without calling into Sub0MemPage at all. The
-  worst case is the page fault it would have taken anyway. **Sub0MemPage never gates correctness — only
-  latency.** This is the property that makes it safe to adopt incrementally around existing mapping-based
-  code, and it is what lets Sub0Llm's existing `moeq::Store`/`FileMap`-based code keep working unchanged
-  while hints are added around it (see `sub0llm-consumer-trace.md`).
+- A **region** names an addressable byte-range source — typically a file — not necessarily a live virtual
+  mapping. A region MAY also carry a caller-supplied mapped view, enabling an explicitly **secondary,
+  opportunistic** mmap-based access mode (§8); the **primary** mode below never requires one.
+- The unit of every call is a **byte range within a region**, paired with a **caller-owned destination**
+  the caller allocated via `register_slots` (§8). Sub0MemPage has no concept of a row, a table, an index,
+  a dtype, or a version, and it never allocates the memory a range's bytes land in. Translating
+  `(table_id, row_index)` or `(layer, expert)` into a byte range — and sizing/typing the destination that
+  range's bytes fill — are both entirely the caller's job — the same boundary Sub0Firn already draws in
+  its own R7 offset-resolver callback and its own `resolve_into`'s copy-into-caller-buffer contract,
+  viewed from underneath it.
+- **In the secondary mmap mode only, every range is always legally readable.** Following CUDA's
+  *"accesses to this range are always coherent and are allowed even when the data is actively being
+  migrated"* and Windows' *"prefetching is not necessary for accessing the target address ranges"*
+  (`prior-art.md` §1, §5): a caller using that mode may dereference any address in a registered mapped
+  view at any time without calling into Sub0MemPage at all — the worst case is the page fault it would
+  have taken anyway. **This does not extend to the primary caller-slot mode** (§8): there, a destination
+  is only valid once `resolve`/`wait`/`try_resolve` reports it resident, the same contract every real
+  precedent researched for caller-owned destinations makes (REQUIREMENTS.md R2). In the mode where it
+  applies, Sub0MemPage never gates correctness — only latency — the property that makes the secondary mode
+  safe to adopt incrementally around existing mapping-based code, and it is what lets Sub0Llm's existing
+  `moeq::Store`/`FileMap`-based code keep working unchanged today while a migration to the primary mode
+  happens around it (see `sub0llm-consumer-trace.md`).
 
 Grounding in the immediate consumer (`Sub0Llm/include/sub0/moe_quant.hpp`, `file_map.hpp`): the region is
-the ~37 GiB S0Q1 sidecar that `moeq::Store` maps whole and read-only; the ranges are `moeq::ByteRange` per
+the ~37 GiB S0Q1 sidecar `moeq::Store` maps whole and read-only today; the ranges are `moeq::ByteRange` per
 `(layer, expert)` plane, already computed by existing code; the declared signal is the MoE router's top-k
-output, known before any expert byte is touched. `ExpertCache`'s current round-robin slot policy is
-exactly the naive replacement a Sub0MemPage-backed policy would supersede — and `file_map.hpp`'s own
-header comment already anticipates this, listing *"no madvise/prefetch hints"* under a deliberately
-narrow scope with no consumer yet.
+output, known before any expert byte is touched; the caller-owned destination pool is `ExpertCache`'s own
+already-allocated `pool_` array, registered via `register_slots` unchanged (§8, `sub0llm-consumer-trace.md`
+§2). `ExpertCache`'s current round-robin slot policy is exactly the naive replacement a Sub0MemPage-backed
+policy would supersede — and `file_map.hpp`'s own header comment already anticipates this, listing *"no
+madvise/prefetch hints"* under a deliberately narrow scope with no consumer yet.
 
 ## 2. The calls, and why each shape was chosen
 
@@ -144,24 +153,29 @@ already says so explicitly rather than presenting it as established practice. Th
    MGLRU) all abandoned exact-order eviction structures for approximate-ordering-plus-batched-maintenance;
    treated as settled given the three-way convergence.
 
-**Eviction exposure**: default silent (an evicted unpinned range is not an error — it's exactly the page
-fault the caller would pay anyway, per §1's "always legally readable" rule). Pinned ranges are never
-evicted — that is the entire reason pinning exists. When the budget cannot be met, the order is: (a) evict
-unpinned ranges by policy; (b) if still short and the request is `DECLARED`, evict speculative residents;
-(c) if still short because pinned bytes alone fill the budget, **fail the call and say so** — never a
-silent overshoot (the DPDK-over-Redis choice, §2 above).
+**Eviction/reuse exposure**: default silent. In the secondary mmap mode, an evicted unpinned range is not
+an error — it's exactly the page fault the caller would pay anyway, per §1's mode-scoped "always legally
+readable" rule. In the primary caller-slot mode (§8), there is no OS-level eviction at all — "eviction"
+means the same slot's key/liveness bookkeeping is cleared and the slot becomes a *reuse* candidate for a
+different range on its next fill, entirely Sub0MemPage's own decision over memory the caller already owns
+(REQUIREMENTS.md R10, R13's updated note). Pinned slots are never reused — that is the entire reason
+pinning exists. When the pool's capacity cannot be met, the order is: (a) evict/reuse unpinned slots by
+policy; (b) if still short and the request is `DECLARED`, evict/reuse speculative residents; (c) if still
+short because pinned slots alone fill the pool, **fail the call and say so** — never a silent overshoot
+(the DPDK-over-Redis choice, §2 above).
 
 ## 4. Why not a veto-capable eviction callback
 
 Named explicitly because it's the most obvious alternative design and worth ruling out on the record, not
-just by omission. A veto callback (`on_evict` returning bool, "may I evict this?") would let a higher
-layer (Sub0Firn, say) refuse an eviction Sub0MemPage's own budget accounting has already decided it needs
-— but the callback runs on Sub0MemPage's own enforcement path, inside whatever lock or bookkeeping
-structure decided the eviction was necessary in the first place. If the callback body touches the very
-region under eviction (a realistic mistake, not a contrived one — a veto handler checking "is this range
-still needed" plausibly wants to read something nearby), it can fault, and a fault inside budget
-enforcement is a reentrancy hazard this design has no answer for. Advisory-after-the-fact has no such
-hazard: by the time `on_evict` runs, the eviction has already happened and the enforcement path is clear.
+just by omission. A veto callback (`on_evict` returning bool, "may I evict/reuse this?") would let a
+higher layer (Sub0Firn, say) refuse an eviction/reuse Sub0MemPage's own capacity accounting has already
+decided it needs — but the callback runs on Sub0MemPage's own enforcement path, inside whatever lock or
+bookkeeping structure decided the eviction was necessary in the first place. If the callback body touches
+the very slot under eviction (a realistic mistake, not a contrived one — a veto handler checking "is this
+range still needed" plausibly wants to read something nearby), it can fault (secondary mode) or race the
+next fill (primary mode), and either is a reentrancy hazard this design has no answer for.
+Advisory-after-the-fact has no such hazard: by the time `on_evict` runs, the eviction/reuse has already
+happened and the enforcement path is clear.
 
 ## 5. Why this, and not X — synthesizing the OS-mechanics hypothesis-testing
 
