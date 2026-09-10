@@ -70,8 +70,8 @@ call, not ten) (`docs/prior-art.md` §2a).
 ## R5. Declared and speculative prefetch are a distinct admission class, not a priority number
 
 "`prefetch`'s `class` parameter distinguishes DECLARED (the caller has computed it will definitely read
-this range) from SPECULATIVE (a predictor guesses it might). A DECLARED range is admitted against the
-budget unconditionally, evicting speculative residents if necessary. A SPECULATIVE range is admitted only
+this range) from SPECULATIVE (a predictor guesses it might). A DECLARED range bypasses the speculative admission filter, evicting unpinned speculative residents
+if necessary, but reports exhaustion/backpressure when slot or submission capacity is unavailable. A SPECULATIVE range is admitted only
 if the replacement policy estimates it beats the current eviction candidate."
 
 Windows' own documentation warns explicitly that over-eager prefetch *"can also create memory pressure...
@@ -147,8 +147,8 @@ everywhere else.
 
 ## R10. Eviction is silent by default; `on_evict` is advisory-only and cannot veto
 
-"Eviction of an unpinned range produces no error and requires no caller action — it is exactly the page
-fault the caller would pay if it touches that range again (R2). An optional `on_evict` callback, if
+"Eviction of an unpinned range produces no error. In the primary mode, its slot may be reused and must
+be resolved again before reading; in the secondary mmap mode, a later access may page fault (R2). An optional `on_evict` callback, if
 registered, is invoked off the caller's own threads, strictly after the eviction has already happened,
 and cannot block or reverse it."
 
@@ -245,3 +245,10 @@ Not repeated in full here — see README.md §1b for the full non-goals list. A 
 of the following needs to argue why the project's scope should change, not just that the feature would be
 convenient: row/table addressing, dtype conversion, content versioning/`invalidate`, remote/HTTP data
 sources, general-purpose key-value caching, allocator replacement.
+
+## Implementation qualification
+
+R7 caps caller-owned slot capacity, not physical residency, total RSS, OS page cache or driver memory.
+A lease prevents reuse; it is not OS page locking or a GPU event. R13's crossing-range algorithm and
+batch result/lifecycle details remain M1/M2 gates in `docs/implementation-plan.md`. A transport probe
+alone does not satisfy the paging requirements.

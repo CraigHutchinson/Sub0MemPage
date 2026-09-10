@@ -27,14 +27,12 @@ block, or that adds a new call implying it might do I/O without saying so explic
 contract, breaks the property this project's entire design exists to provide — not a style nit, a
 correctness-of-contract violation.
 
-## 2. Sub0MemPage never gates correctness, only latency (REQUIREMENTS.md R2)
+## 2. Always-readable applies only to a caller-supplied mapping (REQUIREMENTS.md R2)
 
-Every range in a registered region must remain legally dereferenceable at all times, whether or not any
-Sub0MemPage call has ever been made for it. A change that makes reading an un-hinted, un-resolved range
-undefined behavior, or that requires a caller to call into Sub0MemPage before it is safe to read a byte
-inside a registered region, is a scope violation of the single most load-bearing property in this
-project's design (design.md §1). If a need looks like "the caller must call X before it's safe to read,"
-that need does not belong in this project's core contract.
+In the secondary mmap mode, Sub0MemPage never gates legal reads of an existing mapping. In the
+primary caller-slot mode, bytes become valid only after a successful completion and stay protected
+from reuse while a lease is held. A lease is not OS page locking or GPU synchronization. Preserve
+this distinction when adding a device adapter; the caller must retain leases through device completion.
 
 ## 3. Never bake a specific consumer's domain knowledge into the core (REQUIREMENTS.md R1)
 
@@ -101,9 +99,8 @@ coverage, including the `hint_unconsumed` counter specifically — it is the dir
 declared/speculative admission policy is actually working, and without it "is prefetching helping" is a
 guess (see OQ7 in design.md §7).
 
-## 10. Design-only status — do not add implementation code without checking `README.md`'s status line first
+## 10. Implementation status must describe what actually works
 
-This repo is currently **spec + scaffold only**, matching how Sub0Firn itself started. Before adding real
-paging/mmap implementation code, confirm the status line in `README.md` has actually been updated to
-reflect a decision to begin implementation — do not silently start implementing against a document whose
-own header still says "SPEC / REQUIREMENTS DRAFT."
+Implementation was authorized on 2026-09-10. Follow `docs/implementation-plan.md`; update README status
+as milestones land. Experimental tools do not establish that the paging API is implemented. Never expose
+SYCL or Level Zero dependencies through the portable header-only target.

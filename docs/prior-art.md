@@ -268,3 +268,17 @@ directly measured, not estimated, on the real 37.11 GiB Sub0Llm MoE-expert sidec
 This empirical study is also where B21 — the concrete, measured, currently-unresolved production defect
 that motivates this entire project — was confirmed by direct instrumentation rather than inferred from
 throughput alone. See `docs/design.md` §3 and `docs/sub0llm-consumer-trace.md` for the full account.
+
+## 9. Intel USM boundary
+
+Verified 2026-09-10 against primary sources. [SYCL 2020 USM specification](https://registry.khronos.org/SYCL/specs/sycl-2020/html/sycl-2020.html#sec:usm)
+defines allocation/access aspects and context-bound USM. Device-only storage is not a host file-read
+buffer; allocation support does not establish simultaneous host/device write correctness. Applicability:
+use the selected device's reported aspects, not integrated-GPU topology, to qualify an allocation path.
+
+[Intel copy-optimize specification, pinned revision](https://github.com/intel/llvm/blob/65cc0cfe809f52169b92e6bea782ddc626ba0a87/sycl/doc/extensions/experimental/sycl_ext_oneapi_copy_optimize.asciidoc)
+states: “Shipping software products should not rely on APIs defined in this specification.” Preparation
+optimizes repeated explicit host transfers, not kernel accessibility. Overlapping registrations are
+undefined even across contexts; release must match the original pointer/context. Keep experimental
+preparation separate from leases, and outside per-request execution. Confidence: high, direct source;
+performance benefit and mapping import remain unproven on the local tuple.

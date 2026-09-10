@@ -1,7 +1,9 @@
 # Sub0MemPage — asynchronous, proactive paging orchestration over memory-mapped regions
 
-Status: **SPEC / REQUIREMENTS DRAFT.** No implementation exists yet — `include/sub0mempage/sub0mempage.hpp`
-is a skeleton. This document is the pitch and the concrete API surface; [REQUIREMENTS.md](REQUIREMENTS.md)
+Status: **IMPLEMENTATION STARTED — experimental groundwork.** The paging core in
+`include/sub0mempage/sub0mempage.hpp` remains a skeleton. Implementation starts with the optional Intel
+USM diagnostic and staged-copy qualification; no asynchronous paging API ships yet. See
+[implementation plan](docs/implementation-plan.md) for milestones and acceptance gates. This document is the pitch and the concrete API surface; [REQUIREMENTS.md](REQUIREMENTS.md)
 is the normative contract an implementation is checked against. Mirrors exactly how
 [Sub0Firn](https://github.com/CraigHutchinson/Sub0Firn) started (README + REQUIREMENTS + prior-art +
 design doc + a CMake skeleton, no working implementation yet) — this is the same discipline one layer
