@@ -101,7 +101,7 @@ rather than one call with a hidden side effect.
 
 **`wont_need` is advisory demotion, may be a complete no-op on a platform lacking the primitive.** Modeled
 on POSIX `MADV_COLD` (*"Deactivate a given range of pages... a more probable reclaim target... a
-nondestructive operation"*, `prior-art.md` §2). Stated honestly in REQUIREMENTS.md R13/OQ1: no documented
+nondestructive operation"*, `prior-art.md` §2). Stated honestly in REQUIREMENTS.md R14/OQ1: no documented
 Windows counterpart for a read-only file mapping was found, so this call's actual effect on Windows may be
 limited to "make this range a lower-priority speculative-eviction candidate," not true demotion.
 
@@ -136,11 +136,11 @@ already says so explicitly rather than presenting it as established practice. Th
 3. **Consumption, not hinting, feeds the frequency estimate** (REQUIREMENTS.md R6) — an inference from
    precedent, not a cited finding, but the failure mode it prevents is concrete: without it, a bad
    predictor's wrong guesses become self-reinforcing evidence that the guessed ranges are hot.
-4. **No per-access reporting is ever required** (REQUIREMENTS.md R10) — Linux MGLRU's design is the
+4. **No per-access reporting is ever required** (REQUIREMENTS.md R11) — Linux MGLRU's design is the
    precedent, and the real consumer's own requirement is the reason: a resolve-pass-then-hot-loop shape
    means the library provably cannot see individual accesses. The policy runs on the hint stream, the
    resolve stream, and whatever coarse residency information the OS will give it, and on nothing else.
-5. **No intrusive LRU list** (REQUIREMENTS.md R11) — three independent real systems (Redis, Caffeine,
+5. **No intrusive LRU list** (REQUIREMENTS.md R12) — three independent real systems (Redis, Caffeine,
    MGLRU) all abandoned exact-order eviction structures for approximate-ordering-plus-batched-maintenance;
    treated as settled given the three-way convergence.
 
@@ -253,7 +253,7 @@ Carried in full from the source research, and deliberately not resolved by this 
   platform — may reduce to "stop prefetching and let the OS reclaim," materially weaker than the DPDK-style
   hard cap §3 promises. Candidates to investigate: `VirtualUnlock`, `OfferVirtualMemory`,
   `SetProcessWorkingSetSizeEx`, or unmapping/remapping sub-views. **Must be resolved before the hard budget
-  is claimed as a portable guarantee**, or REQUIREMENTS.md R13 is violated on day one.
+  is claimed as a portable guarantee**, or REQUIREMENTS.md R14 is violated on day one.
 - **OQ2 — `madvise` blocking semantics.** Not independently confirmed from a primary source. Re-verify
   before claiming `MADV_WILLNEED` is non-blocking on Linux.
 - **OQ3 — RESOLVED, 2026-09-10.** *Was*: hint the OS page cache (cheap, portable, the whole point of an

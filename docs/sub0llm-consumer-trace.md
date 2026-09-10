@@ -69,7 +69,7 @@ conflated jobs (bookkeeping vs. content) moves underneath it, not about introduc
   (`SlotFloats`, `PerExpert`). What changes is that this same array is now also passed to
   `register_slots(region, slot_bytes, Slots, pool_.get())` once, at construction, registering it with
   Sub0MemPage as the destination pool Sub0MemPage will schedule fills into and track residency over.
-  **No new allocation anywhere** — this is R14 in practice, not just in principle.
+  **No new allocation anywhere** — this is R9 in practice, not just in principle.
 - **Before layer L's FFN region begins** (the router's top-k output for layer L is known at this point,
   strictly before any of that layer's expert bytes are touched — the same "declared signal known ahead of
   use" property REQUIREMENTS.md R5 is built around): one thread issues a single `prefetch(pool, ranges,
@@ -81,7 +81,7 @@ conflated jobs (bookkeeping vs. content) moves underneath it, not about introduc
 - **Inside the parallel region**, each of the 10 `MoeDecodeThread`s calls `resolve(pool, its_own_range,
   DECLARED)` instead of `ExpertCache::resolve()`'s own current key-check-then-`store.raw(desc)` logic —
   Sub0MemPage now does the key-check-and-slot-selection bookkeeping (generalizing `ExpertCache`'s own
-  `key_`/`live_` arrays, R14) and, on a miss, issues the fill directly into the chosen slot rather than
+  `key_`/`live_` arrays, R9) and, on a miss, issues the fill directly into the chosen slot rather than
   through a mapping fault. Still synchronous, still correct if the prefetch hasn't finished yet (`resolve`
   blocks until resident, exactly like today's reactive fault would have), but now usually resolving
   against bytes the earlier `prefetch` call has already brought in. The returned lease is held for exactly
@@ -94,7 +94,7 @@ conflated jobs (bookkeeping vs. content) moves underneath it, not about introduc
   longer expected — cheap to add, advisory, and precisely expresses something `ExpertCache`'s own
   round-robin policy has no way to say today: "this layer is done, deprioritize these slots for reuse
   before the next one." Unlike the original mapping-based sketch, this needs no OS cooperation at all in
-  the primary mode (REQUIREMENTS.md R13's own updated note) — "deprioritize for reuse" is pure Sub0MemPage
+  the primary mode (REQUIREMENTS.md R14's own updated note) — "deprioritize for reuse" is pure Sub0MemPage
   bookkeeping over memory `ExpertCache` already owns.
 
 **What does not change**: `dequantize_expert()`'s own two-step decode (`gguf::to_f32` then

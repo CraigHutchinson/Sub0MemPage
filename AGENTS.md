@@ -44,7 +44,7 @@ change that special-cases any one caller's domain inside the residency-managemen
 violation, not a convenience — exactly the failure mode README.md §1b argues against. If a need looks
 domain-specific, it belongs in the caller's own adapter code (or in Sub0Firn, one layer up), not here.
 
-## 4. Portability is checked on Windows and Linux both, not compiled on one (REQUIREMENTS.md R13)
+## 4. Portability is checked on Windows and Linux both, not compiled on one (REQUIREMENTS.md R14)
 
 See `STYLE_GUIDE.md`. A change that only builds/behaves correctly on the author's own OS is not done. This
 is a harder rule for Sub0MemPage than for a typical library, because the two platform mechanics (Windows
@@ -77,7 +77,7 @@ why — never leave them silently inconsistent with the actual API.
 
 ## 7. A budget claim needs an actual enforcement test; a concurrency claim needs an actual concurrent test
 
-REQUIREMENTS.md R7's "hard budget, never a silent overshoot" and R12's "overlapping-range coalescing" are
+REQUIREMENTS.md R7's "hard budget, never a silent overshoot" and R13's "overlapping-range coalescing" are
 both testable, specific claims — the same "verify eviction/caching algorithm choices" discipline extends
 to verifying the *code*, not just the *design*, actually enforces them under real concurrent load and real
 budget pressure, not only single-threaded happy-path exercise.
@@ -94,7 +94,7 @@ without measuring it: `ParallelExperts` is architecturally identical to a shape 
 isolation, and does not scale in production, for a reason still not fully understood — a reminder that
 "this should scale" is not the same claim as "this was measured to scale."
 
-## 9. Observability ships with the feature, not after it (REQUIREMENTS.md R9's `stats` extension)
+## 9. Observability ships with the feature, not after it (REQUIREMENTS.md R10's `stats` extension)
 
 A new replacement policy or platform-primitive backend is not complete without corresponding `stats()`
 coverage, including the `hint_unconsumed` counter specifically — it is the direct measure of whether a

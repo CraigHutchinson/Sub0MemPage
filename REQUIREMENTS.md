@@ -126,7 +126,7 @@ original mapping-based framing — only whose memory is being protected changed,
 and note the pleasant convergence R1's own note already makes: this is now the *same* shape Sub0Firn's own
 `resolve_into` already has, one layer down, not a new concept its maintainer has to learn.
 
-## R14. Sub0MemPage never allocates the destination storage bytes land in
+## R9. Sub0MemPage never allocates the destination storage bytes land in
 
 "Every call that fills or resolves byte-range content writes into memory the caller supplied at
 registration time (`register_slots`'s `slots_ptr`); Sub0MemPage's own internal allocations, if any, are
@@ -145,7 +145,7 @@ project family's own standing no-runtime-allocation-on-hot-paths discipline (Sub
 hot-path allocation its real, motivating consumer has spent its own engineering effort eliminating
 everywhere else.
 
-## R9. Eviction is silent by default; `on_evict` is advisory-only and cannot veto
+## R10. Eviction is silent by default; `on_evict` is advisory-only and cannot veto
 
 "Eviction of an unpinned range produces no error and requires no caller action — it is exactly the page
 fault the caller would pay if it touches that range again (R2). An optional `on_evict` callback, if
@@ -158,7 +158,7 @@ sharing the region (`docs/design.md` §4). Advisory-after-the-fact keeps the enf
 still giving a higher layer (Sub0Firn, in particular — see `docs/sub0firn-reconciliation.md` D4) the
 signal it needs to drop its own index entries pointing into an evicted range.
 
-## R10. No replacement policy requires per-access caller cooperation
+## R11. No replacement policy requires per-access caller cooperation
 
 "The replacement/eviction policy must be maintainable using only the `prefetch`/`resolve`/`try_resolve`
 call stream and whatever coarse OS-level residency signal is available on the platform — never a
@@ -170,7 +170,7 @@ point is a hot loop that reads a resolved pointer with zero further library call
 R3) — a design that needs per-access feedback to stay accurate is incompatible with its own primary
 consumer.
 
-## R11. No intrusive exact-ordering eviction structure
+## R12. No intrusive exact-ordering eviction structure
 
 "The replacement policy must not maintain a global intrusive linked list (or equivalent exact-order
 structure) that every access reorders under a shared lock."
@@ -180,7 +180,7 @@ Three independent, real, battle-tested systems — Redis (sampling + a candidate
 — all abandoned exact LRU lists for the same reason and converged on *approximate ordering plus deferred,
 batched maintenance* (`docs/prior-art.md` §5d). That three-way convergence is treated as settled.
 
-## R12. Concurrent requests for overlapping ranges coalesce into one real fetch
+## R13. Concurrent requests for overlapping ranges coalesce into one real fetch
 
 "Multiple threads calling `prefetch`/`resolve` concurrently for ranges that overlap must trigger exactly
 one real I/O for the overlapping bytes, not one per caller."
@@ -190,7 +190,7 @@ natural to guarantee than at row granularity, and the real motivating consumer (
 up to 10 concurrent decode threads) makes duplicate concurrent fetches for the same hot plane a real,
 expected occurrence, not an edge case.
 
-## R13. Public semantics do not differ by platform; a genuine platform gap is stated honestly, not hidden
+## R14. Public semantics do not differ by platform; a genuine platform gap is stated honestly, not hidden
 
 "No public API behavior differs by platform for a caller that does not opt into a platform-specific
 extension. Where a platform genuinely lacks a mechanism another platform has (see OQ1 below), the
@@ -202,7 +202,7 @@ Windows counterpart to Linux's `MADV_DONTNEED`/`MADV_PAGEOUT` demotion primitive
 mapping was found in this project's own research** (`docs/prior-art.md` §2a). This gap is now scoped
 narrower than the original draft: it affects only the **secondary mmap mode** (§1's opportunistic
 zero-copy path), where actually removing a page from residency genuinely depends on an OS primitive that
-may not exist on Windows. It does **not** affect R7/R9 for the **primary caller-slot mode** (R1, R14),
+may not exist on Windows. It does **not** affect R7/R10 for the **primary caller-slot mode** (R1, R9),
 because "reuse" there is Sub0MemPage's own bookkeeping decision over memory the caller already owns — no
 OS cooperation is needed to mark a caller-owned slot reusable, since nothing has to be evicted from
 anywhere, only overwritten on the next fill. `wont_need` and the hard cap keep their full documented
@@ -214,9 +214,9 @@ opts into the secondary mode.
 Full detail in [docs/design.md](docs/design.md) §5 (OQ1–OQ7); listed here because each one bears directly
 on whether a requirement above can be claimed as fully met on a given platform:
 
-- **OQ1** (feeds R13, R9) — narrowed, not closed: Windows demotion primitive for a read-only mapping is
-  still unresolved for the **secondary mmap mode only**; it no longer affects R7/R9 in the primary
-  caller-slot mode (R13's own text above explains why).
+- **OQ1** (feeds R14, R10) — narrowed, not closed: Windows demotion primitive for a read-only mapping is
+  still unresolved for the **secondary mmap mode only**; it no longer affects R7/R10 in the primary
+  caller-slot mode (R14's own text above explains why).
 - **OQ2** (feeds R3, R4): whether Linux `madvise(MADV_WILLNEED)` genuinely never blocks was not confirmed
   from a primary source — only `posix_fadvise(POSIX_FADV_WILLNEED)`'s non-blocking guarantee is
   independently confirmed. Now relevant only to the secondary mmap mode, since the primary mode's async
@@ -224,16 +224,16 @@ on whether a requirement above can be claimed as fully met on a given platform:
   `madvise` for the secondary mode's own guarantee on Linux.
 - **OQ3 — RESOLVED, 2026-09-10.** Was: hint the OS page cache vs. own a private buffer pool with direct
   async reads. Resolved in favor of the latter as the primary mode, with the caller owning the buffer pool
-  (R1, R14) — full reasoning in `docs/design.md` §8, decisive additional evidence beyond the original
+  (R1, R9) — full reasoning in `docs/design.md` §8, decisive additional evidence beyond the original
   PostgreSQL precedent is this project's own B21 finding (`docs/design.md` §6).
 - **OQ6** (feeds R5): whether the declared/speculative split is the right shape at all — no precedent
   found offers two first-class call shapes for this against one cache. Named as the design's most
   speculative element, not hidden as settled.
-- **OQ7** (feeds R7, R10): the correct pool sizing (`num_slots`/`slot_bytes`) for any real deployment is
+- **OQ7** (feeds R7, R11): the correct pool sizing (`num_slots`/`slot_bytes`) for any real deployment is
   currently a guess; `stats`' `hint_unconsumed`/`resolve_misses` counters (part of every implementation,
   per this contract) exist specifically so a real run produces the trace that answers it later, following
   Bandana's own "simulate dozens of small caches" sizing technique (`docs/prior-art.md`).
-- **New, from R14**: whether a single uniform `slot_bytes` per pool (matching `ExpertCache`'s own
+- **New, from R9**: whether a single uniform `slot_bytes` per pool (matching `ExpertCache`'s own
   same-shaped-slots precedent exactly) is general enough for a future consumer with genuinely
   variable-sized ranges, or whether a non-uniform-slot variant will eventually be needed, is untested —
   named here rather than assumed away, since the only real consumer characterized so far (Sub0Llm's MoE

@@ -39,7 +39,7 @@ in one running process. Anything a caller decides once per region (page size, wh
 primitive exists on this platform) belongs in `policy_hints` at `register_region` time, not re-evaluated
 per `prefetch` call.
 
-## Portability is load-bearing, not aspirational (REQUIREMENTS.md R13)
+## Portability is load-bearing, not aspirational (REQUIREMENTS.md R14)
 
 No header may contain an unconditional `#include <windows.h>`, POSIX-only header, or platform-specific
 syscall without an `#if`-guarded portable abstraction on every other platform. A change that only compiles
@@ -64,7 +64,7 @@ first, explanation second" structure). Concretely:
 
 ## No third-party dependencies in the header-only core
 
-Matches R13's portability spirit and `CMakeLists.txt`'s interface-library shape: the vendored header-only
+Matches R14's portability spirit and `CMakeLists.txt`'s interface-library shape: the vendored header-only
 client must build with nothing beyond the C++23 standard library and the OS's own platform headers behind
 an `#if` guard. A future linked library, once one becomes genuinely necessary for real background-thread
 I/O machinery, may take on a real dependency (Boost.Asio, liburing) — that boundary is exactly why this

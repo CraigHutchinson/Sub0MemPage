@@ -50,7 +50,7 @@ only because Sub0Firn's RAM tier is a private, never-evicted-mid-use structure. 
 dangling-view hazard the moment that tier is a budget-enforced region that can reclaim pages under
 pressure — which is precisely what a Sub0MemPage-backed RAM tier would be.
 
-Sub0MemPage hands back a lease naming a slot under active reuse pressure (R8, R14 — updated 2026-09-10:
+Sub0MemPage hands back a lease naming a slot under active reuse pressure (R8, R9 — updated 2026-09-10:
 Sub0MemPage's ownership model resolved to caller-owned destination slots, `docs/design.md` §8, rather than
 pointers into a library- or OS-managed mapping), so residency lifetime must be explicit, or it is a
 use-after-reuse bug waiting to happen.
