@@ -33,7 +33,8 @@ contract corrections, package order and gates; the scheduler remains unimplement
   (`prior-art.md` §1, §5): a caller using that mode may dereference any address in a registered mapped
   view at any time without calling into Sub0MemPage at all — the worst case is the page fault it would
   have taken anyway. **This does not extend to the primary caller-slot mode** (§8): there, a destination
-  is only valid once `resolve`/`wait`/`try_resolve` reports it resident, the same contract every real
+  is readable only while a successful `resolve`/`try_resolve` lease is held; `wait` reports
+  completion but does not pin, the same contract every real
   precedent researched for caller-owned destinations makes (REQUIREMENTS.md R2). In the mode where it
   applies, Sub0MemPage never gates correctness — only latency — the property that makes the secondary mode
   safe to adopt incrementally around existing mapping-based code, and it is what lets Sub0Llm's existing
@@ -396,7 +397,8 @@ library's, but still the thing `release` un-pins and still the thing that is nev
 specifically to the OQ3-secondary opportunistic mmap mode, where a live mapping genuinely exists and a
 caller may dereference it without calling into Sub0MemPage at all. Under the primary caller-buffer mode,
 there is no mapping for the caller to legally dereference ahead of a `resolve`/`wait` — the caller's
-destination buffer is only valid after that call completes, exactly the same contract every precedent in
+destination buffer is readable only while a successful lease is held; `wait` alone does not
+prevent reuse, exactly the same contract every precedent in
 `prior-art.md` §5a already has (an `aiocb`'s `aio_buf`, a `DSTORAGE_REQUEST::Destination`, a `cuFile`-
 registered pointer are all only valid once the operation they're tied to completes). This is not a
 weakened guarantee relative to those precedents — it is the same one they all make — but REQUIREMENTS.md

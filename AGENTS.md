@@ -82,8 +82,8 @@ budget pressure, not only single-threaded happy-path exercise.
 
 ## 8. Correctness before performance (mirrors Sub0Firn AGENTS.md §8)
 
-A change is not "done" on a benchmark number alone. This project has essentially no correctness
-infrastructure yet (no code has shipped), which makes this rule easy to skip past in the early stages —
+A change is not "done" on a benchmark number alone. The paging scheduler has no correctness
+infrastructure yet (the first tests cover capability-tool argument validation only), which makes this rule easy to skip past in the early stages —
 resist that. A claimed throughput or hit-rate improvement needs the same rigor `docs/prior-art.md` already
 models for citations: state what was actually measured, under what real (or realistically simulated)
 access pattern, and whether it was checked against a correctness baseline first. The B21 motivating

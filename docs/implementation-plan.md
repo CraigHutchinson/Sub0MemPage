@@ -81,3 +81,9 @@ unit tests with warnings enabled, Windows and Linux builds, and sanitizer checks
 unavailable platforms instead of calling them passed. The first backend is not production-ready until
 M2/M3 budget, lifetime, concurrency, failure and real-file gates pass. No engine integration or performance
 claim is part of M1. Coordinate hardware runs with Sub0Llm's active work log.
+
+## Checkpoint: M0/M1 complete
+
+The reviewed plan and optional inventory are implemented. [Validation](validation/2026-09-22/README.md)
+records offline Windows/Linux tests, sanitizer coverage, the actual Intel report and remaining limits.
+M2 is next; M3–M6 remain unimplemented. Naming was explicitly deferred by the user.

@@ -30,8 +30,8 @@ requirement forbids (`docs/design.md` §8, `docs/prior-art.md` §5a).
 `docs/design.md` §8), a caller may dereference any address inside that mapping at any time, whether or not
 `prefetch`, `resolve`, or any other call has ever been made for that range. The worst case is the page
 fault the caller would have taken with no Sub0MemPage in the picture at all. This guarantee does NOT
-extend to the primary caller-slot mode: there, a slot's destination bytes are only valid once `resolve`,
-`wait`, or `try_resolve` reports them resident — the same contract every real precedent researched for
+extend to the primary caller-slot mode: there, a slot's destination bytes are readable only while a successful `resolve` or `try_resolve`
+lease is held. `wait` reports fill completion but does not pin a slot against reuse — the same contract every real precedent researched for
 caller-owned destinations makes (a POSIX `aiocb`'s `aio_buf`, a `DSTORAGE_REQUEST::Destination`, a
 `cuFile`-registered pointer are all only valid once their own operation completes), not a weaker one."
 
@@ -59,7 +59,7 @@ call safe to place inside a tighter loop than the rest of the API is built aroun
 ## R4. `prefetch` is batch-shaped and asynchronous by construction
 
 "`prefetch` accepts an array of possibly-discontiguous byte ranges in one call and returns without
-blocking, without allocating on the caller's thread or initiating synchronous I/O. This does not promise that
+waiting on I/O, without allocating on the caller's thread or initiating synchronous I/O. This does not promise that
 pageable caller buffers, code or metadata cannot incur OS page faults; logical pinning prevents slot
 reuse, not physical paging."
 

@@ -1,0 +1,29 @@
+{
+  "schema": "sub0mempage.intel-usm-evidence.v1",
+  "utc": "2026-09-22T21:23:36.6690519Z",
+  "source_base_commit": "ee0e565659d224d1efd1e84ba6dca0784a434557",
+  "source_state": "uncommitted M1 implementation; source hashes identify tested files",
+  "source_sha256": {
+    "tools/intel/usm_capabilities.cpp": "DBA51836BE549B927686CA3D6A6B3CA2E71358B5ACA5FFA13D6A60359540564E",
+    "tools/intel/ProbeOptions.hpp": "2562F141F4685EA3241525EBFFF7A5426E4B6433B9DE00CA38DC46043721305A",
+    "tools/intel/CMakeLists.txt": "25CC98755A327E638272A8A17C9799F0DA5342D843EEE3482BD47D560CEE1C1D",
+    "CMakeLists.txt": "F364EE92A98F5F00A34DB5D6CB6EC33FAF15251EAD970C622A5CB668C0B8FA9A"
+  },
+  "os": "Microsoft Windows 10.0.26220",
+  "compiler": "C:\\Program Files (x86)\\Intel\\oneAPI\\compiler\\2025.3\\bin\\icx-cl.exe",
+  "compiler_version": [
+    "Intel(R) oneAPI DPC++/C++ Compiler 2025.3.3 (2025.3.3.20260319)",
+    "Target: x86_64-pc-windows-msvc",
+    "Thread model: posix",
+    "InstalledDir: C:\\Program Files (x86)\\Intel\\oneAPI\\compiler\\2025.3\\bin\\compiler"
+  ],
+  "build": "cmake -S . -B build/intel-usm -G Ninja -DCMAKE_CXX_COMPILER=<compiler> -DCMAKE_BUILD_TYPE=Release -DSUB0MEMPAGE_BUILD_INTEL_USM_PROBE=ON; cmake --build build/intel-usm --parallel 1",
+  "executable_sha256": "EDAA5038341C72E1570649153888B5219B3A94F4A3467CE8812821C76675CAD7",
+  "arguments": [
+    "--device-id",
+    "0x7d67"
+  ],
+  "oneapi_device_selector": "level_zero:gpu",
+  "exit_code": 0,
+  "scope": "capability inventory only; no allocations, kernels, copies or timing"
+}

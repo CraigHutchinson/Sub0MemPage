@@ -52,8 +52,8 @@ abstractions like Sub0Firn.
 - **In the secondary, opportunistic mmap mode only: every range is always legally readable.** A caller
   using that mode may dereference any address in a registered mapped view at any time without calling into
   Sub0MemPage at all — the worst case is the page fault it would have taken anyway. **This guarantee does
-  not extend to the primary caller-buffer mode**: there, a destination is only valid once `resolve`/`wait`
-  completes, exactly the same contract every real precedent researched for this shape makes (a POSIX
+  not extend to the primary caller-buffer mode**: there, a destination is readable only while a successful `resolve`/`try_resolve`
+  lease is held (`wait` reports completion but does not pin), exactly the same contract every real precedent researched for this shape makes (a POSIX
   `aiocb`'s `aio_buf`, a `DSTORAGE_REQUEST::Destination`, a `cuFile`-registered pointer) — not a weaker
   guarantee than those, the same one.
 
@@ -170,7 +170,7 @@ register_slots(region, slot_bytes, num_slots, slots_ptr) -> pool_handle
 prefetch(pool, ranges[], class) -> ticket
     // THE hint call. Batch-shaped from the start (Win32 PrefetchVirtualMemory takes an array of
     // discontiguous ranges in one call). NEVER BLOCKS ON I/O. Never allocates on the caller's thread. Never
-    // initiates blocking I/O inline; pageable memory can still fault. 
+    // initiates blocking I/O inline; pageable memory can still fault.
     // For each range: an already-filled slot is a hit; a miss claims
     // a slot (evicting an unpinned resident by policy if the pool is full) and issues an async fill
     // directly into that caller-owned slot.
@@ -279,6 +279,21 @@ achieve concurrent disk I/O in production — measured `\PhysicalDisk\Avg. Disk 
 identical resolve code scales 4.2–5.2x under the identical OS/mapping/file. The full trace, with the real
 measured numbers, is in [docs/design.md](docs/design.md) §3 and [docs/sub0llm-consumer-trace.md](docs/sub0llm-consumer-trace.md).
 
-## 6. License
+## 6. Build the first implementation package
+
+The default build requires only a C++23 compiler and runs offline tests:
+
+```sh
+cmake --preset default
+cmake --build --preset default
+ctest --preset default
+```
+
+The Intel USM inventory is opt-in and has no dependency on Sub0Llm. See
+[the probe guide](tools/intel/README.md) for compiler setup, strict device selection and output scope.
+[Validation](docs/validation/2026-09-22/README.md) records Windows/Linux tests and the actual inventory.
+The paging scheduler and transfer backend remain future packages in the implementation plan.
+
+## 7. License
 
 MIT — see [LICENSE.md](LICENSE.md), matching Sub0Firn's own choice.

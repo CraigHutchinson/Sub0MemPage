@@ -12,6 +12,7 @@ include(GNUInstallDirs)
 
 option(SUB0MEMPAGE_BUILD_TESTING  "Build unit-tests" ON)
 option(SUB0MEMPAGE_BUILD_EXAMPLES "Build examples"   OFF)
+option(SUB0MEMPAGE_BUILD_INTEL_USM_PROBE "Build optional Intel SYCL capability inventory" OFF)
 
 if(SUB0MEMPAGE_BUILD_TESTING AND NOT IS_SUBPROJECT)
     enable_testing()
@@ -40,4 +41,8 @@ endif()
 
 if(SUB0MEMPAGE_BUILD_EXAMPLES AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples/CMakeLists.txt")
     add_subdirectory(examples)
+endif()
+
+if(SUB0MEMPAGE_BUILD_INTEL_USM_PROBE)
+    add_subdirectory(tools/intel)
 endif()
