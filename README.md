@@ -1,11 +1,10 @@
 # Sub0MemPage — asynchronous, proactive paging orchestration over memory-mapped regions
 
-Status: **SPEC / REQUIREMENTS DRAFT.** No implementation exists yet — `include/sub0mempage/sub0mempage.hpp`
-is a skeleton. This document is the pitch and the concrete API surface; [REQUIREMENTS.md](REQUIREMENTS.md)
-is the normative contract an implementation is checked against. Mirrors exactly how
-[Sub0Firn](https://github.com/CraigHutchinson/Sub0Firn) started (README + REQUIREMENTS + prior-art +
-design doc + a CMake skeleton, no working implementation yet) — this is the same discipline one layer
-further down the stack.
+Status: **IMPLEMENTATION STARTED — experimental capability diagnostics first.** The paging API in
+`include/sub0mempage/sub0mempage.hpp` remains a design skeleton; no residency scheduler ships yet.
+[Implementation plan](docs/implementation-plan.md) gives the ordered packages and acceptance gates;
+[Intel USM decision](docs/intel-usm.md) defines the optional diagnostic and future adapter boundary.
+REQUIREMENTS.md remains the normative target contract, not a claim that every requirement is implemented.
 
 **Documentation map**:
 - [REQUIREMENTS.md](REQUIREMENTS.md) — the normative contract (R1–Rn), each a testable sentence.
@@ -170,23 +169,24 @@ register_slots(region, slot_bytes, num_slots, slots_ptr) -> pool_handle
 
 prefetch(pool, ranges[], class) -> ticket
     // THE hint call. Batch-shaped from the start (Win32 PrefetchVirtualMemory takes an array of
-    // discontiguous ranges in one call). NEVER BLOCKS. Never allocates on the caller's thread. Never
-    // faults inline. For each range: a hit against an already-filled slot costs nothing; a miss claims
+    // discontiguous ranges in one call). NEVER BLOCKS ON I/O. Never allocates on the caller's thread. Never
+    // initiates blocking I/O inline; pageable memory can still fault. 
+    // For each range: an already-filled slot is a hit; a miss claims
     // a slot (evicting an unpinned resident by policy if the pool is full) and issues an async fill
     // directly into that caller-owned slot.
     // `class` is DECLARED ("I have computed I will read this") or SPECULATIVE ("a predictor thinks
     // so") -- governs ADMISSION, not priority (docs/design.md sec 3).
-    // The returned `ticket` is OPTIONAL to use -- a caller that will never wait may discard it and
-    // pays nothing.
+    // A ticket records completion, not ownership. Discarding it releases bookkeeping, not an
+    // in-flight destination. Ticket/queue exhaustion is reported; storage is bounded at registration.
 
 wait(ticket, deadline?) -> outcome
-    // Blocks the CALLING THREAD ONLY until every range named by that ticket's prefetch is resident in
-    // its slot, or the deadline passes. `outcome` reports resident / partially-resident / declined per
-    // range -- "partially fail" is a documented platform outcome, not an exception here either.
+    // Blocks the CALLING THREAD ONLY until each submitted fill completes, fails, or the deadline passes. `outcome` reports resident / partially-resident / declined per
+    // range. Completion does not pin bytes: obtain a lease with resolve/try_resolve before reading;
+    // an intervening eviction can make that acquisition miss again.
 
 resolve(pool, ranges[], class) -> lease[]
     // Synchronous. For each range: hit-or-miss-then-fill-then-pin, as prefetch's miss path but
-    // blocking, into a caller-owned slot. Returns one lease per range naming which slot now holds it.
+    // blocking, into caller-owned slots. Returns segmented leases when a range spans source chunks.
     // The recovery path for "the hint wasn't given in time," and equally correct for a caller with no
     // useful look-ahead at all. FAILS with pool-exhausted (not a silent overshoot) if every slot is
     // pinned and none can be reclaimed.
@@ -196,7 +196,7 @@ release(lease)
     // policy -- not reused eagerly. RAII-shaped in the C++ binding; the lease is the resource.
 
 try_resolve(pool, ranges[], class) -> optional<lease[]>
-    // Never blocks, never faults, never starts I/O. All-or-nothing: returns a lease per range iff
+    // Never blocks on I/O, never starts I/O. OS paging is outside this guarantee. All-or-nothing: returns a lease per range iff
     // EVERY named range is already resident in its slot, otherwise nothing. The one call safe to
     // place inside a tighter loop than the resolve-pass the rest of the API is built around.
 

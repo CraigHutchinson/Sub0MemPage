@@ -7,8 +7,8 @@ does not paper over. Mirrors
 [Sub0Firn/docs/tiered-storage-design.md](https://github.com/CraigHutchinson/Sub0Firn/blob/main/docs/tiered-storage-design.md)'s
 own role one layer up the stack.
 
-Status: **DESIGN ONLY. No engine code this pass**, following the same staging convention Sub0Firn itself
-used (and that Sub0Llm's own architecture docs established before it).
+Status: **Implementation started.** See [implementation-plan.md](implementation-plan.md) for reviewed
+contract corrections, package order and gates; the scheduler remains unimplemented.
 
 ---
 
@@ -43,9 +43,8 @@ used (and that Sub0Llm's own architecture docs established before it).
 Grounding in the immediate consumer (`Sub0Llm/include/sub0/moe_quant.hpp`, `file_map.hpp`): the region is
 the ~37 GiB S0Q1 sidecar `moeq::Store` maps whole and read-only today; the ranges are `moeq::ByteRange` per
 `(layer, expert)` plane, already computed by existing code; the declared signal is the MoE router's top-k
-output, known before any expert byte is touched; the caller-owned destination pool is `ExpertCache`'s own
-already-allocated `pool_` array, registered via `register_slots` unchanged (§8, `sub0llm-consumer-trace.md`
-§2). `ExpertCache`'s current round-robin slot policy is exactly the naive replacement a Sub0MemPage-backed
+output, known before any expert byte is touched; the raw-byte destination pool must be separate from `ExpertCache`'s decoded-float `pool_`
+(see the corrected `sub0llm-consumer-trace.md` §2). `ExpertCache`'s current round-robin slot policy is exactly the naive replacement a Sub0MemPage-backed
 policy would supersede — and `file_map.hpp`'s own header comment already anticipates this, listing *"no
 madvise/prefetch hints"* under a deliberately narrow scope with no consumer yet.
 
@@ -137,8 +136,8 @@ already says so explicitly rather than presenting it as established practice. Th
    functions would imply two mechanisms; there is one queue, one budget, one policy structure — following
    CUDA's own composition rule that advice *"guides the migration policy when a fault occurs"* rather than
    inventing a parallel cache.
-2. **Class governs admission, not priority.** A `DECLARED` range is admitted unconditionally, evicting
-   speculative residents if necessary. A `SPECULATIVE` range is admitted only if the policy estimates it
+2. **Class governs admission, not priority.** A `DECLARED` range bypasses speculative filtering but still fails on exhausted
+   slot/queue/ticket capacity; pinned or filling slots cannot be evicted. A `SPECULATIVE` range is admitted only if the policy estimates it
    beats the current eviction candidate — Caffeine's TinyLFU admission filter, applied to prefetch rather
    than to insertion. Directly justified by Windows' own warning that over-eager prefetch *"can also
    create memory pressure... applications should only prefetch address ranges they will actually use."*
@@ -204,8 +203,8 @@ empirical study (§3 below) actually measured which one was real on this machine
 1. **Prefetch, not faster faults, is the top lever — by an order of magnitude.** The real decode workload
    runs the device at queue length 0.04–0.20 against a demonstrated 6.34 GB/s ceiling at queue length
    9-12. Every one of the real workload's per-token resolves is a *predictable* read (the router picks its
-   experts for layer L before layer L's FFN runs), so a design that issues layer L+1's reads while layer L
-   computes turns a blocking stall into overlapped work. Nothing else in this document is worth as much.
+   experts for layer L before layer L's FFN runs), so reads for already-routed experts can overlap computation of completed experts
+   within that batch. Layer L+1 routing is not generally known while layer L computes. Nothing else in this document is worth as much.
 2. **Explicit overlapped I/O beats mmap by 1.5-2.9x at matched concurrency, and ~1.47x on ceiling** — a
    real, local, measured argument for async-I/O-over-mmap, stated honestly as 1.5-2.9x, not as "mmap is
    the bottleneck." It is not, on this machine, at this scale.
@@ -296,12 +295,8 @@ software — is not.
 
 Carried in full from the source research, and deliberately not resolved by this design document:
 
-- **OQ1 — Windows demotion.** No documented Windows counterpart to `MADV_DONTNEED`/`MADV_PAGEOUT` for a
-  read-only file mapping was found. If none exists, budget *enforcement* on Windows — the first target
-  platform — may reduce to "stop prefetching and let the OS reclaim," materially weaker than the DPDK-style
-  hard cap §3 promises. Candidates to investigate: `VirtualUnlock`, `OfferVirtualMemory`,
-  `SetProcessWorkingSetSizeEx`, or unmapping/remapping sub-views. **Must be resolved before the hard budget
-  is claimed as a portable guarantee**, or REQUIREMENTS.md R14 is violated on day one.
+- **OQ1 — Windows demotion.** Still open for the secondary mmap mode only. Primary slot capacity
+  is a hard bound on managed destination bytes, not a bound on process RSS or OS page-cache residency.
 - **OQ2 — `madvise` blocking semantics.** Not independently confirmed from a primary source. Re-verify
   before claiming `MADV_WILLNEED` is non-blocking on Linux.
 - **OQ3 — RESOLVED, 2026-09-10.** *Was*: hint the OS page cache (cheap, portable, the whole point of an
@@ -377,15 +372,10 @@ with (a): once the primary mode is an explicit async fill rather than a reactive
 being filled has to be a stable address *before* the read is issued — which a caller-owned buffer already
 is, and a library-internal allocation would need its own separate lifetime story to provide.
 
-**This is not new design — it is the general form of code the real consumer already wrote out of
-necessity.** Sub0Llm's `moeq::ExpertCache<Slots, SlotFloats>` (`include/sub0/moe_quant.hpp`, unchanged,
-already merged) already allocates and owns its own pool (`std::unique_ptr<float[]> pool_`, sized from its
-own compile-time-known constants), and its `resolve()` method today conflates two genuinely separate jobs:
-deciding which slot a `(layer, expert)` key belongs in and detecting a hit — pure bookkeeping, no content
-knowledge required — and faulting the raw bytes in, then dequantizing them into that slot — entirely
-content-aware, entirely Sub0Llm's own business. Sub0MemPage's job is exactly the first half, generalized to
-any caller-owned destination shape, plus scheduling the I/O that fills wherever the caller points it —
-never the second half, and never the allocation the caller already had a compile-time-sized answer for.
+**The consumer separates encoded input from decoded output.** `ExpertCache::pool_` stores decoded
+floats and cannot simultaneously be the raw-byte destination. A caller-slot adoption needs separately
+budgeted raw staging, or retains the existing mapping as a CPU source. Content transformation and the
+validity of decoded cache entries remain the caller's responsibility. See `sub0llm-consumer-trace.md`.
 
 **What this changes in the call surface** (README.md §3, revised to match): a new `register_slots(region,
 slot_bytes, num_slots, slots_ptr) -> pool_handle` call registers the caller's own pre-allocated array of
@@ -421,52 +411,14 @@ learn to bridge to when adopting Sub0MemPage, but the same contract, repeated at
 Full sketch of what this looks like at the real consumer's actual call site: `sub0llm-consumer-trace.md`
 §2, revised alongside this section.
 
-## 9. Future scope — heterogeneous CPU/GPU/iGPU memory backends (proposed, not yet designed)
+## 9. Optional heterogeneous-memory work
 
-Raised 2026-09-10, alongside §8's ownership-model resolution — recorded here as a **deliberate,
-documented future direction**, not a design commitment. No research pass has been done for this section
-yet; everything below is a scoping argument for *why it belongs in this project's charter*, not a spec.
+The reviewed scope is [intel-usm.md](intel-usm.md), implemented in stages in
+[implementation-plan.md](implementation-plan.md). Include the Intel capability inventory as a default-off
+standalone diagnostic. Do not make SYCL a dependency of the portable core.
 
-**The argument for including it, not spinning up a separate project**: §8's caller-owned-slot contract
-(`register_region`/`register_slots`/`prefetch`/`resolve`/`release`, a hard capacity fixed by the caller's
-own allocation, declared-vs-speculative admission) is not disk-specific in its shape — it is already
-modeled in part on CUDA Unified Memory's `cudaMemAdvise`/`cudaMemPrefetchAsync` (`prior-art.md` §1, the
-single most-cited precedent in this whole document), which solves the *identical* residency-hinting
-problem for CPU/GPU memory placement rather than disk-backed files. A GPU or iGPU backend under the same
-contract fills in a box this design already drew, rather than requiring a new one.
-
-**This is not speculative for Sub0Llm specifically — it is already live, independent work reinventing
-part of this vocabulary.** `Sub0Llm/docs/INTEL_IGPU_USM_CAPABILITY_SPIKE.md` is a real, in-progress
-research spike into Intel iGPU Unified Shared Memory (SYCL USM allocation aspects, Level Zero extension
-inventory), and its `prepare_for_device_copy`/`release_from_device_copy` pair (SYCL's own
-`SYCL_EXT_ONEAPI_COPY_OPTIMIZE` extension) is structurally the same "pin before use, release after" cycle
-as this project's own `resolve`/`release` — arrived at independently, for a different backend, by a
-different piece of the same project. Left unaddressed, Sub0Llm accumulates a second, independently-
-invented residency vocabulary rather than a second *backend* for one.
-
-**What genuinely differs across the candidate backends, stated honestly rather than glossed over** — this
-is NOT "one implementation, three flags":
-
-- **Local disk (the backend this project is currently designed against)**: data genuinely moves across a
-  storage bus; residency means "is it in DRAM at all."
-- **Discrete GPU (CUDA Unified Memory)**: data genuinely moves across PCIe/NVLink between distinct physical
-  memory pools; `cudaMemAdvise`'s `SET_PREFERRED_LOCATION`/`SET_ACCESSED_BY` are about *which* pool, not
-  just *whether* resident.
-- **Integrated GPU (Intel iGPU/USM, and analogous APUs)**: physical memory is frequently already shared
-  between CPU and GPU; "residency" there is closer to pinning against a coherency domain and avoiding an
-  unnecessary copy than to moving bytes at all — a materially different cost model from the other two.
-
-Each would be a genuinely distinct backend implementation, the same way this project's own Windows/Linux
-OS-mechanics split already is (§2, §8) — the value of including them under one project is the *shared
-contract and vocabulary* (budget semantics, admission classes, lease/pin lifecycle, observability), not a
-claim that one code path serves all three.
-
-**Naming**: no rename is proposed. "Page" is not disk-specific — it is the literal common addressing unit
-across CPU virtual memory, CUDA Unified Memory (which itself uses page-granular fault-driven migration),
-and iGPU/USM pages alike; broadening scope this way makes the name more apt, not less.
-
-**Explicitly not done by this section**: no API surface, no requirements, no prior-art research for GPU/
-iGPU-specific primitives (Level Zero, SYCL USM, `cudaMemAdvise`'s full advice set beyond what `prior-art.md`
-§1 already cites, AMD's HIP/ROCm equivalent) has been done yet. This section exists to record the scoping
-decision and its reasoning; a dedicated research-and-design pass (mirroring how §8's own ownership model
-was researched) is the next step if this direction is pursued.
+A USM allocation aspect is not proof of physical residency, useful prefetch, kernel access to a file
+mapping, or simultaneous CPU/GPU coherence. Prepared-copy registration optimizes explicit copies; it
+is not equivalent to `resolve`/`release`. A future adapter must keep caller allocation ownership,
+logical slot leases, copy completion and registration lifetime separate. No generic backend API is
+introduced until a concrete transfer implementation and consumer can test those distinctions.

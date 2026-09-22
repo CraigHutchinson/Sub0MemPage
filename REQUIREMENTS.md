@@ -59,7 +59,9 @@ call safe to place inside a tighter loop than the rest of the API is built aroun
 ## R4. `prefetch` is batch-shaped and asynchronous by construction
 
 "`prefetch` accepts an array of possibly-discontiguous byte ranges in one call and returns without
-blocking, without allocating on the caller's thread, and without issuing any blocking fault."
+blocking, without allocating on the caller's thread or initiating synchronous I/O. This does not promise that
+pageable caller buffers, code or metadata cannot incur OS page faults; logical pinning prevents slot
+reuse, not physical paging."
 
 Directly modeled on Windows' own `PrefetchVirtualMemory`, whose signature takes `NumberOfEntries` +
 an array of `WIN32_MEMORY_RANGE_ENTRY` for exactly this reason — *"the API will efficiently bring in
@@ -70,8 +72,8 @@ call, not ten) (`docs/prior-art.md` §2a).
 ## R5. Declared and speculative prefetch are a distinct admission class, not a priority number
 
 "`prefetch`'s `class` parameter distinguishes DECLARED (the caller has computed it will definitely read
-this range) from SPECULATIVE (a predictor guesses it might). A DECLARED range is admitted against the
-budget unconditionally, evicting speculative residents if necessary. A SPECULATIVE range is admitted only
+this range) from SPECULATIVE (a predictor guesses it might). A DECLARED range bypasses speculative admission filtering, evicting unpinned speculative residents
+if necessary, but reports failure when slot, queue or ticket capacity is exhausted. A SPECULATIVE range is admitted only
 if the replacement policy estimates it beats the current eviction candidate."
 
 Windows' own documentation warns explicitly that over-eager prefetch *"can also create memory pressure...
@@ -147,8 +149,9 @@ everywhere else.
 
 ## R10. Eviction is silent by default; `on_evict` is advisory-only and cannot veto
 
-"Eviction of an unpinned range produces no error and requires no caller action — it is exactly the page
-fault the caller would pay if it touches that range again (R2). An optional `on_evict` callback, if
+"Eviction of an unpinned range produces no error. In the secondary mmap mode a subsequent CPU access
+may fault (R2). In the primary mode eviction permits slot reuse; a caller must acquire a new lease
+before reading it again. An optional `on_evict` callback, if
 registered, is invoked off the caller's own threads, strictly after the eviction has already happened,
 and cannot block or reverse it."
 
@@ -182,11 +185,11 @@ batched maintenance* (`docs/prior-art.md` §5d). That three-way convergence is t
 
 ## R13. Concurrent requests for overlapping ranges coalesce into one real fetch
 
-"Multiple threads calling `prefetch`/`resolve` concurrently for ranges that overlap must trigger exactly
-one real I/O for the overlapping bytes, not one per caller."
+"Overlapping concurrent requests normalize to fixed slot-sized source chunks, clipped at EOF. While
+a chunk is filling or resident, requests share that fill rather than fetch the chunk independently.
+A multi-chunk range yields segmented leases; re-fetch after eviction or failure is allowed."
 
-Inherited unchanged from Sub0Firn's own R5, one layer down — at page granularity this is if anything more
-natural to guarantee than at row granularity, and the real motivating consumer (Sub0Llm's `ParallelExperts`,
+Refines Sub0Firn's own R5 into fixed source-chunk coalescing, and the real motivating consumer (Sub0Llm's `ParallelExperts`,
 up to 10 concurrent decode threads) makes duplicate concurrent fetches for the same hot plane a real,
 expected occurrence, not an edge case.
 

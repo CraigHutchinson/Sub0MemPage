@@ -268,3 +268,9 @@ directly measured, not estimated, on the real 37.11 GiB Sub0Llm MoE-expert sidec
 This empirical study is also where B21 — the concrete, measured, currently-unresolved production defect
 that motivates this entire project — was confirmed by direct instrumentation rather than inferred from
 throughput alone. See `docs/design.md` §3 and `docs/sub0llm-consumer-trace.md` for the full account.
+
+## Intel USM capability boundary (2026-09-22)
+
+The primary-source review and dated device tuple are in [intel-usm.md](intel-usm.md). USM aspects
+qualify allocation/access contracts; the copy-optimization extension prepares repeated explicit copies.
+Neither is proof of a physical residency lease or direct GPU access to an ordinary file mapping.

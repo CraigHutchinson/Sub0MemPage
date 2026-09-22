@@ -23,15 +23,9 @@ copy) fits this consumer exactly:
 > evictable, so they count against the working set the OS can reclaim under pressure, not against
 > committed private bytes that it cannot."
 
-`Store::raw(const Desc&)` hands back a `std::span<const std::uint8_t>` directly into the mapping — today,
-this IS the raw-byte access `resolve`'s fill would replace, per §2 below. Under Sub0MemPage's ownership
-resolution (design.md §8), the *destination* those bytes ultimately land in was never going to be
-Sub0Llm's real problem — `dequantize_expert` already reads them once and writes typed float output
-elsewhere — so replacing this mapping-fault read with an explicit fill into `ExpertCache`'s own registered
-slot changes only how the source bytes arrive, not what happens to them afterward. What today's code does
-not need to worry about, because nothing evicts anything (the mapping is simply left to the OS's own
-default page-cache behavior, unmanaged), is exactly the gap `resolve`'s lease (R8, D2 in
-`sub0firn-reconciliation.md`) exists to close once residency becomes actively managed.
+`Store::raw(const Desc&)` returns encoded bytes from the CPU mapping. Explicit fills would instead
+populate a distinct raw staging pool; dequantization then writes decoded output elsewhere. This changes
+memory budgeting and the adapter, not just the mapping's hint policy.
 
 `ExpertCache<Slots, SlotFloats>::resolve()` is the actual "cache" today, and its own comment states plainly
 what kind of cache it is:
@@ -45,65 +39,33 @@ round-robin) sitting *on top of* the mapping — it has no concept of the mappin
 mapping itself has no prefetching, no budget, and no eviction policy whatsoever; it is handed entirely to
 the OS's default behavior. **This is exactly the gap Sub0MemPage exists to fill**, one layer below
 `ExpertCache`, not a replacement for it: `ExpertCache`'s job (cache decoded f32 planes) and Sub0MemPage's
-job (manage which raw encoded bytes are physically resident) are genuinely different layers, and nothing
-about adopting Sub0MemPage would remove `ExpertCache` — it would give the mapping underneath it the
-proactive, budget-managed residency it currently lacks.
+job (schedule raw encoded bytes into bounded caller-owned storage) are genuinely different layers, and nothing
+about adopting Sub0MemPage would remove `ExpertCache` — it would provide a bounded raw-input path beneath the decoded cache.
 
-## 2. How `decode.cpp`'s `ParallelExperts` would look calling Sub0MemPage — sketched in prose
+## 2. Corrected integration trace (2026-09-22)
 
-Today (per the B21 backlog entry, `Sub0Llm/docs/INDEPENDENT_REVIEW_BACKLOG.md`), each of
-`MOE_DECODE_THREADS` (10, at the real generated config) OpenMP threads gets its own heap-allocated
-`MoeDecodeThread` holding a private single-slot `ExpertCache`, and independently calls `resolve()` for its
-own assigned expert — which, underneath, calls `dequantize_expert()` on bytes read straight out of the
-shared `Store`'s mapping via `store.raw(desc)`, faulting them in reactively, one thread at a time, with no
-coordination at all between the ten threads about what any of them will need next.
+`ExpertCache::pool_` holds decoded float planes. The file region holds encoded quantized bytes.
+They cannot be the same registered destination: a raw fill would overwrite cached floats, and a decode
+could read overlapping source/output. The earlier trace claiming unchanged storage with no additional
+allocation was incorrect. `dequantize_expert` reads encoded bytes and writes decoded floats after a
+scratch decode/transpose; newer consumer paths also need auditing before integration.
 
-**Sub0MemPage's ownership resolution (`docs/design.md` §8) makes this trace far more concrete than the
-mapping-based sketch this document originally had**: `ExpertCache<Slots, SlotFloats>` is not merely
-*analogous* to Sub0MemPage's own caller-owned slot pool — it already IS one, hand-written, generalized
-here rather than replaced. The trace below is therefore mostly about which of `ExpertCache`'s own two
-conflated jobs (bookkeeping vs. content) moves underneath it, not about introducing a new structure.
+1. Keep Sub0Llm's decoded cache and allocations under Sub0Llm ownership. Allocate a separate bounded
+   raw-byte pool at startup if explicit file fills are selected; count it in deployment memory planning.
+   Alternatively, keep the mapped CPU source and accept its opportunistic residency semantics.
+2. Register that raw pool only. Once the router has selected experts, submit their encoded ranges in a
+   batch. `resolve`/`try_resolve` return leases over completed raw chunks, never decoded float entries.
+3. Decode into the existing output storage while retaining every input lease. An adapter must handle
+   multi-chunk segmented input or choose a separately justified contiguous staging strategy; this is
+   not promised to be a one-line change to a contiguous-input decoder.
+4. Release input leases after CPU consumption, or after the last GPU event using them has completed.
+   A prefetch ticket and `wait` alone do not pin the input. Cache decoded output using Sub0Llm's policy.
+5. Pipeline reads against computation within the known routed batch. Do not assume next-layer routing
+   is available before computing the current layer. Preserve the current engine fallback until parity
+   and measurement against its existing pipelined-I/O implementation pass.
 
-- **`ExpertCache::pool_` (the `std::unique_ptr<float[]>` backing storage) stays exactly where it is,
-  allocated exactly as it is today** — Sub0Llm still owns and sizes it from its own compile-time constants
-  (`SlotFloats`, `PerExpert`). What changes is that this same array is now also passed to
-  `register_slots(region, slot_bytes, Slots, pool_.get())` once, at construction, registering it with
-  Sub0MemPage as the destination pool Sub0MemPage will schedule fills into and track residency over.
-  **No new allocation anywhere** — this is R9 in practice, not just in principle.
-- **Before layer L's FFN region begins** (the router's top-k output for layer L is known at this point,
-  strictly before any of that layer's expert bytes are touched — the same "declared signal known ahead of
-  use" property REQUIREMENTS.md R5 is built around): one thread issues a single `prefetch(pool, ranges,
-  DECLARED)` call carrying all ~10 experts' `ByteRange`s for that layer — replacing what is today ten
-  independent, uncoordinated reactive fault sequences with one batched hint that fills directly into
-  `ExpertCache`'s own registered slots, the same "many discontiguous ranges, one call" shape Windows' own
-  `PrefetchVirtualMemory` is built for (design.md §2), but landing the bytes straight into memory
-  `ExpertCache` already owns rather than into an OS-managed mapping a second copy would then have to leave.
-- **Inside the parallel region**, each of the 10 `MoeDecodeThread`s calls `resolve(pool, its_own_range,
-  DECLARED)` instead of `ExpertCache::resolve()`'s own current key-check-then-`store.raw(desc)` logic —
-  Sub0MemPage now does the key-check-and-slot-selection bookkeeping (generalizing `ExpertCache`'s own
-  `key_`/`live_` arrays, R9) and, on a miss, issues the fill directly into the chosen slot rather than
-  through a mapping fault. Still synchronous, still correct if the prefetch hasn't finished yet (`resolve`
-  blocks until resident, exactly like today's reactive fault would have), but now usually resolving
-  against bytes the earlier `prefetch` call has already brought in. The returned lease is held for exactly
-  as long as `dequantize_expert()` needs the raw encoded bytes, then released.
-- **What `dequantize_expert()` reads from changes from `store.raw(desc)` (a span into the mapping) to the
-  slot the lease names (a span into `ExpertCache`'s own `pool_`)** — a one-line change at the call site,
-  not a restructuring, since the slot IS the same memory `store.raw` used to point application code at
-  conceptually, just filled by an explicit async read instead of a page fault.
-- **After layer L is fully consumed**, a `wont_need(pool, layer_L_ranges)` call marks those slots as no
-  longer expected — cheap to add, advisory, and precisely expresses something `ExpertCache`'s own
-  round-robin policy has no way to say today: "this layer is done, deprioritize these slots for reuse
-  before the next one." Unlike the original mapping-based sketch, this needs no OS cooperation at all in
-  the primary mode (REQUIREMENTS.md R14's own updated note) — "deprioritize for reuse" is pure Sub0MemPage
-  bookkeeping over memory `ExpertCache` already owns.
-
-**What does not change**: `dequantize_expert()`'s own two-step decode (`gguf::to_f32` then
-`transplant::transpose_out_in`) is completely untouched — Sub0MemPage never interprets bytes
-(`sub0firn-reconciliation.md` D6's point, one layer further down). The `#pragma omp parallel`/`#pragma omp
-for schedule(static)` structure is completely untouched. `ExpertCache`'s own allocation, sizing, and
-per-thread ownership are completely untouched. Only the path from "I need these raw encoded bytes" to
-"here they are, in the slot I already own" changes, from an unmanaged reactive fault straight through the
-OS to a managed, budget-aware, prefetch-able fill directly into existing memory.
+This is a proposed adapter, not an integration already made. Inspect the current consumer at M4; the
+B21 numbers below are historical motivation, not a claim about today's code or throughput.
 
 ## 3. B21 as the concrete, measured motivating evidence
 

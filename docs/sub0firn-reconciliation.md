@@ -114,7 +114,7 @@ unchanged by anything here.
 ## D7 — No pluggable remote sources
 
 **Deliberate, and it is the honest boundary of the layering — worth being blunt about, not glossing over.**
-Sub0MemPage's regions must be memory-mappable, so Sub0Firn's `remote_http_range(base_url, ...)` source
+The first backend accepts local files (an actual mapping is optional), so Sub0Firn's `remote_http_range(base_url, ...)` source
 descriptor **cannot** be a Sub0MemPage region. A Sub0Firn built on Sub0MemPage would use it for the local-
 file tiers only (`local_flat_file`, `local_sharded`, and the `local_disk_cache_dir` sitting in front of the
 HTTP source) and would keep its own HTTP Range client entirely to itself.

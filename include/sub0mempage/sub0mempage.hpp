@@ -21,8 +21,8 @@ namespace sub0mempage {
 // behind each call's shape (sec 8 specifically for why destinations are caller-owned slots, not
 // library-owned memory), docs/sub0firn-reconciliation.md for how this contract composes with Sub0Firn's
 // own API one layer up, and docs/sub0llm-consumer-trace.md for how Sub0Llm's real ExpertCache /
-// ParallelExperts decode loop would call this contract once it exists -- including the concrete point
-// that ExpertCache's own pool_ array is registered via register_slots UNCHANGED, never reallocated.
+// ParallelExperts decode loop would call this contract once it exists -- including the separation
+// between encoded input staging and ExpertCache's decoded float output storage.
 //
 // Ownership model, stated once here because it shapes every signature below (docs/design.md sec 8,
 // docs/prior-art.md sec 5a): Sub0MemPage NEVER allocates bulk destination storage. The caller allocates

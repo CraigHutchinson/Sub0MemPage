@@ -3,7 +3,7 @@
 This file is a pre-flight checklist, not a tutorial — the same role
 [Sub0Firn's own `AGENTS.md`](https://github.com/CraigHutchinson/Sub0Firn/blob/main/AGENTS.md) plays one
 layer up, and [Sub0Llm's own `AGENTS.md`](https://github.com/CraigHutchinson/Sub0Llm/blob/main/AGENTS.md)
-plays for the project this whole lineage descends from. No code has shipped yet, so unlike Sub0Llm's own
+plays for the project this whole lineage descends from. The paging scheduler has not shipped yet, so unlike Sub0Llm's own
 document these rules aren't citing a bug that already happened in *this* repo — they're derived directly
 from real decisions already made in `REQUIREMENTS.md`/`README.md`/`docs/`, stated here as constraints so
 implementation starts from them rather than rediscovering them the hard way. Update this file the day a
@@ -27,14 +27,12 @@ block, or that adds a new call implying it might do I/O without saying so explic
 contract, breaks the property this project's entire design exists to provide — not a style nit, a
 correctness-of-contract violation.
 
-## 2. Sub0MemPage never gates correctness, only latency (REQUIREMENTS.md R2)
+## 2. Mapped sources remain readable; caller slots require completion and a lease (R2, R8)
 
-Every range in a registered region must remain legally dereferenceable at all times, whether or not any
-Sub0MemPage call has ever been made for it. A change that makes reading an un-hinted, un-resolved range
-undefined behavior, or that requires a caller to call into Sub0MemPage before it is safe to read a byte
-inside a registered region, is a scope violation of the single most load-bearing property in this
-project's design (design.md §1). If a need looks like "the caller must call X before it's safe to read,"
-that need does not belong in this project's core contract.
+In the secondary mmap mode, CPU access to the caller's mapping stays valid without a hint.
+In the primary caller-slot mode, a successful lease acquisition is required before reading filled bytes.
+A completion ticket alone does not prevent reuse. Neither rule grants a GPU access to ordinary mapped
+memory or physically locks a page in RAM. See docs/implementation-plan.md and docs/intel-usm.md.
 
 ## 3. Never bake a specific consumer's domain knowledge into the core (REQUIREMENTS.md R1)
 
@@ -101,9 +99,8 @@ coverage, including the `hint_unconsumed` counter specifically — it is the dir
 declared/speculative admission policy is actually working, and without it "is prefetching helping" is a
 guess (see OQ7 in design.md §7).
 
-## 10. Design-only status — do not add implementation code without checking `README.md`'s status line first
+## 10. Implementation status must describe what actually works
 
-This repo is currently **spec + scaffold only**, matching how Sub0Firn itself started. Before adding real
-paging/mmap implementation code, confirm the status line in `README.md` has actually been updated to
-reflect a decision to begin implementation — do not silently start implementing against a document whose
-own header still says "SPEC / REQUIREMENTS DRAFT."
+Implementation began at the user's request on 2026-09-22. README.md distinguishes working experimental
+diagnostics from the still-unimplemented paging scheduler. Update the plan and validation evidence as
+each package lands; do not describe a capability query as a working residency backend.
