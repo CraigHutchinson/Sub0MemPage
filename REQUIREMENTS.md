@@ -5,7 +5,7 @@ explained — the sentence is what an implementation is checked against; the exp
 that and not something weaker. Sourced from the three research streams consolidated in
 [docs/prior-art.md](docs/prior-art.md) and the design synthesis in [docs/design.md](docs/design.md) —
 nothing here is asserted without a concrete cited source or a measured finding behind it. Follows
-[Sub0Firn/REQUIREMENTS.md](https://github.com/CraigHutchinson/Sub0Firn/blob/main/REQUIREMENTS.md)'s own
+[Sub0TieredCache/REQUIREMENTS.md](https://github.com/CraigHutchinson/Sub0TieredCache/blob/main/REQUIREMENTS.md)'s own
 style exactly, one layer down the stack.
 
 ## R1. Sub0MemPage owns residency, not addressing, and not content — and never allocates bulk data storage
@@ -16,7 +16,7 @@ extent, and never allocates the memory those bytes land in — that memory is al
 caller-owned (`register_slots`, README.md §3)."
 
 Translating `(table_id, row_index)` or `(layer, expert)` into a byte range is entirely the caller's job —
-exactly the boundary Sub0Firn's own R7 offset-resolver callback already draws, viewed from the layer
+exactly the boundary Sub0TieredCache's own R7 offset-resolver callback already draws, viewed from the layer
 below it (`docs/design.md` §1). Baking any addressing or content semantics into Sub0MemPage would tie a
 generic residency-management engine to one caller's domain, defeating the reason it exists as a separate,
 lower project at all. The caller-owned-storage half of this requirement is the same boundary seen from the
@@ -51,7 +51,7 @@ equally standard promise instead (R3, R8).
 `try_resolve`, `wont_need`, `release`, and `stats` must never block on I/O. No other call implicitly
 triggers a synchronous fetch."
 
-Mirrors Sub0Firn's own R2 exactly, one layer down — the same load-bearing guarantee a caller with a
+Mirrors Sub0TieredCache's own R2 exactly, one layer down — the same load-bearing guarantee a caller with a
 no-heap-allocation/bounded-latency hot-path rule (Sub0Llm's `AGENTS.md` §1, the real motivating case) needs
 a hard contract for, not a "usually fast." `try_resolve`'s never-blocks guarantee is what makes it the one
 call safe to place inside a tighter loop than the rest of the API is built around.
@@ -124,8 +124,8 @@ This is the mechanism that makes handing back a lease over a caller-owned, Sub0M
 at all — without it, a caller reading a "resolved" slot under memory pressure risks another resolve
 overwriting it out from under a still-live read (a use-after-evict bug, unchanged in substance from the
 original mapping-based framing — only whose memory is being protected changed, per R1/`docs/design.md`
-§8). See `docs/sub0firn-reconciliation.md` D2 for why this is the one concept Sub0Firn itself lacks today,
-and note the pleasant convergence R1's own note already makes: this is now the *same* shape Sub0Firn's own
+§8). See `docs/sub0tieredcache-reconciliation.md` D2 for why this is the one concept Sub0TieredCache itself lacks today,
+and note the pleasant convergence R1's own note already makes: this is now the *same* shape Sub0TieredCache's own
 `resolve_into` already has, one layer down, not a new concept its maintainer has to learn.
 
 ## R9. Sub0MemPage never allocates the destination storage bytes land in
@@ -158,7 +158,7 @@ and cannot block or reverse it."
 A veto-capable callback would place arbitrary caller code on the critical path of budget enforcement,
 where it could deadlock (by touching the region and faulting inside the veto) or stall every other thread
 sharing the region (`docs/design.md` §4). Advisory-after-the-fact keeps the enforcement path bounded while
-still giving a higher layer (Sub0Firn, in particular — see `docs/sub0firn-reconciliation.md` D4) the
+still giving a higher layer (Sub0TieredCache, in particular — see `docs/sub0tieredcache-reconciliation.md` D4) the
 signal it needs to drop its own index entries pointing into an evicted range.
 
 ## R11. No replacement policy requires per-access caller cooperation
@@ -169,7 +169,7 @@ per-access `touch()`-style call the caller must remember to make on every read."
 
 Linux MGLRU's own design is the precedent: the kernel does not ask anyone to report accesses, it reads
 hardware accessed bits in bulk on its own schedule (`docs/prior-art.md` §5c). The real consumer's whole
-point is a hot loop that reads a resolved pointer with zero further library calls (mirrors Sub0Firn's own
+point is a hot loop that reads a resolved pointer with zero further library calls (mirrors Sub0TieredCache's own
 R3) — a design that needs per-access feedback to stay accurate is incompatible with its own primary
 consumer.
 
@@ -189,7 +189,7 @@ batched maintenance* (`docs/prior-art.md` §5d). That three-way convergence is t
 a chunk is filling or resident, requests share that fill rather than fetch the chunk independently.
 A multi-chunk range yields segmented leases; re-fetch after eviction or failure is allowed."
 
-Refines Sub0Firn's own R5 into fixed source-chunk coalescing, and the real motivating consumer (Sub0Llm's `ParallelExperts`,
+Refines Sub0TieredCache's own R5 into fixed source-chunk coalescing, and the real motivating consumer (Sub0Llm's `ParallelExperts`,
 up to 10 concurrent decode threads) makes duplicate concurrent fetches for the same hot plane a real,
 expected occurrence, not an edge case.
 
@@ -200,7 +200,7 @@ extension. Where a platform genuinely lacks a mechanism another platform has (se
 requirement this affects is documented as weakened on that platform — never silently degraded and never
 smoothed over as if the guarantee were uniform."
 
-Mirrors Sub0Firn's own R8. The honest caveat that requirement inherits and sharpens here: **no documented
+Mirrors Sub0TieredCache's own R8. The honest caveat that requirement inherits and sharpens here: **no documented
 Windows counterpart to Linux's `MADV_DONTNEED`/`MADV_PAGEOUT` demotion primitives for a read-only file
 mapping was found in this project's own research** (`docs/prior-art.md` §2a). This gap is now scoped
 narrower than the original draft: it affects only the **secondary mmap mode** (§1's opportunistic

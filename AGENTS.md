@@ -1,7 +1,7 @@
 # Agent instructions for Sub0MemPage
 
 This file is a pre-flight checklist, not a tutorial — the same role
-[Sub0Firn's own `AGENTS.md`](https://github.com/CraigHutchinson/Sub0Firn/blob/main/AGENTS.md) plays one
+[Sub0TieredCache's own `AGENTS.md`](https://github.com/CraigHutchinson/Sub0TieredCache/blob/main/AGENTS.md) plays one
 layer up, and [Sub0Llm's own `AGENTS.md`](https://github.com/CraigHutchinson/Sub0Llm/blob/main/AGENTS.md)
 plays for the project this whole lineage descends from. The paging scheduler has not shipped yet, so unlike Sub0Llm's own
 document these rules aren't citing a bug that already happened in *this* repo — they're derived directly
@@ -40,7 +40,7 @@ The reuse boundary is the byte range, full stop — `register_region` never lear
 "n-gram" mean, and the core never parses any specific file format or interprets any byte's meaning. A
 change that special-cases any one caller's domain inside the residency-management core is a scope
 violation, not a convenience — exactly the failure mode README.md §1b argues against. If a need looks
-domain-specific, it belongs in the caller's own adapter code (or in Sub0Firn, one layer up), not here.
+domain-specific, it belongs in the caller's own adapter code (or in Sub0TieredCache, one layer up), not here.
 
 ## 4. Portability is checked on Windows and Linux both, not compiled on one (REQUIREMENTS.md R14)
 
@@ -64,11 +64,11 @@ verified one — this project's own prior-art document already flags, honestly, 
 verbatim-quoted vs. tool-summarized vs. title-only; extend that same discipline to new sources, don't
 relax it.
 
-## 6. Before changing the public API, re-check `docs/sub0llm-consumer-trace.md` and `docs/sub0firn-reconciliation.md`
+## 6. Before changing the public API, re-check `docs/sub0llm-consumer-trace.md` and `docs/sub0tieredcache-reconciliation.md`
 
 Those two documents are this project's acceptance tests, not just examples — the API is checked against a
 real caller's real needs (Sub0Llm's `ParallelExperts`) and against the layering contract a real sibling
-project (Sub0Firn) would need to keep working if it ever adopted this library. If a proposed API change
+project (Sub0TieredCache) would need to keep working if it ever adopted this library. If a proposed API change
 would make any of the consumer trace's call patterns, or any of the reconciliation's "kept identical"
 guarantees, stop being expressible, either the change is wrong or those documents need updating to show
 why — never leave them silently inconsistent with the actual API.
@@ -80,7 +80,7 @@ both testable, specific claims — the same "verify eviction/caching algorithm c
 to verifying the *code*, not just the *design*, actually enforces them under real concurrent load and real
 budget pressure, not only single-threaded happy-path exercise.
 
-## 8. Correctness before performance (mirrors Sub0Firn AGENTS.md §8)
+## 8. Correctness before performance (mirrors Sub0TieredCache AGENTS.md §8)
 
 A change is not "done" on a benchmark number alone. The paging scheduler has no correctness
 infrastructure yet (the first tests cover capability-tool argument validation only), which makes this rule easy to skip past in the early stages —

@@ -36,7 +36,7 @@ Reviewed 2026-09-22. Implementation is authorized; the paging API remains a draf
 | M1 | Optional `tools/intel` capability executable; offline CLI tests used by that executable | Default build has no SYCL dependency; strict Intel Level Zero selection; six aspects, actual identity and explicit untested states; Windows/Linux portable tests |
 | M2 | Bounded slot state machine, consumed by a deterministic fake-I/O scheduler fixture | Empty/filling/ready/failed states; generation-checked tickets; move-only leases; duplicate/overlap coalescing; rollback on batch failure; exhaustion and no hot-path allocations |
 | M3 | Async local-file workers feeding M2: Windows overlapped I/O and Linux backend | Real files and short reads; errors and cancellation; concurrent overlap; complete draining before unregister/destruction; both OSes tested |
-| M4 | Sub0Llm raw-byte adapter and Sub0Firn local-tier example | Encoded-byte parity with direct file reads; decoded outputs unchanged; explicit extra raw-pool budget; benchmark against current consumer |
+| M4 | Sub0Llm raw-byte adapter and Sub0TieredCache local-tier example | Encoded-byte parity with direct file reads; decoded outputs unchanged; explicit extra raw-pool budget; benchmark against current consumer |
 | M5 | Optional caller-owned USM transfer adapter | Context/allocation validation; host/device ownership transitions; completion-before-reuse tests; async errors; independent Windows/Linux capability results |
 | M6 | Policy and overlap tuning, then optional mmap hints | Measured hit/miss and unconsumed-hint counts; bounded memory/queues; uncontended interleaved baselines; no unsupported hard mmap residency claim |
 

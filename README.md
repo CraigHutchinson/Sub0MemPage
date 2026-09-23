@@ -12,21 +12,19 @@ REQUIREMENTS.md remains the normative target contract, not a claim that every re
 - [STYLE_GUIDE.md](STYLE_GUIDE.md) — naming and code-style conventions.
 - [docs/](docs/) — reference material: [design.md](docs/design.md) (the full design rationale — read
   this for the "why," this README is the "what"), [prior-art.md](docs/prior-art.md) (real cited
-  systems/papers/OS mechanics), [sub0firn-reconciliation.md](docs/sub0firn-reconciliation.md) (the
-  point-by-point divergence analysis against Sub0Firn's own API), and
+  systems/papers/OS mechanics), [sub0tieredcache-reconciliation.md](docs/sub0tieredcache-reconciliation.md) (the
+  point-by-point divergence analysis against Sub0TieredCache's own API), and
   [sub0llm-consumer-trace.md](docs/sub0llm-consumer-trace.md) (the design traced against Sub0Llm's real,
   already-merged MoE-expert sidecar code).
 
 ## Naming
 
-**Sub0MemPage** = "memory-mapped **page**" orchestration — a sibling of `Sub0Firn` (the glaciology-metaphor
-tiered-cache library) and `Sub0Pipeline`/`Sub0Log` in this project family's naming convention, but named
-plainly rather than metaphorically because this layer is genuinely mechanical: it owns *pages*, not a
-metaphor for compacted snow. Keeps the `Sub0` lineage (`sub0::` is Sub0Llm's own C++ namespace; `sub0firn::`
-and `sub0mempage::` are unnested siblings of it, not nested components).
+**Sub0MemPage** names the byte-range paging and memory-slot layer beneath the tiered-cache
+abstraction. It is a sibling of `Sub0TieredCache`, `Sub0Pipeline` and `Sub0Log` in the `Sub0` family.
+The C++ namespaces `sub0::`, `sub0tieredcache::` and `sub0mempage::` remain independent.
 
 - **Repository**: `Sub0MemPage`.
-- **C++ namespace**: `sub0mempage::` (lowercase, unnested — matching `sub0firn::`'s own precedent).
+- **C++ namespace**: `sub0mempage::` (lowercase, unnested — matching `sub0tieredcache::`'s own precedent).
 - **Library target name**: `Sub0MemPage` (CMake target), conventionally installed as `libsub0mempage`.
 
 ## 1. Scope
@@ -36,7 +34,7 @@ itself.** It is a general-purpose, lower-level C++ library for *asynchronous, pr
 orchestration* — prefetch scheduling, working-set budget enforcement, and the OS async-I/O mechanics
 (Windows overlapped I/O/IOCP, Linux `io_uring`, with `PrefetchVirtualMemory`/`madvise`/`posix_fadvise`
 available for an explicitly secondary mmap-based mode) — sitting **beneath** higher-level table-serving
-abstractions like Sub0Firn.
+abstractions like Sub0TieredCache.
 
 - A **region** names an addressable byte-range source, typically a file — not necessarily a live virtual
   mapping. A region MAY also be backed by a memory-mapped view, offered as a secondary, opportunistic
@@ -45,7 +43,7 @@ abstractions like Sub0Firn.
   the caller allocated and sized itself. Sub0MemPage has no concept of a row, a table, an index, a dtype,
   or a version, and it never allocates the memory a range's bytes land in — translating `(table_id,
   row_index)` or `(layer, expert)` into a byte range, and sizing/typing the destination that range's bytes
-  fill, are both entirely the caller's job. This is the same boundary Sub0Firn already draws in its own R7
+  fill, are both entirely the caller's job. This is the same boundary Sub0TieredCache already draws in its own R7
   offset-resolver callback and its own `resolve_into`'s copy-into-caller-buffer contract, viewed from
   underneath it — see [docs/prior-art.md](docs/prior-art.md) §5a and
   [docs/design.md](docs/design.md) §8 for the full ownership-model research and reasoning.
@@ -77,13 +75,13 @@ abstractions like Sub0Firn.
 ### 1b. Explicitly out of scope (non-goals)
 
 - **Not a row/table cache.** No concept of `(table_id, row_index)`, no dtype conversion, no
-  content-versioning/`invalidate` semantics — that is entirely Sub0Firn's job, one layer up. See
-  `docs/sub0firn-reconciliation.md` D6.
+  content-versioning/`invalidate` semantics — that is entirely Sub0TieredCache's job, one layer up. See
+  `docs/sub0tieredcache-reconciliation.md` D6.
 - **Not a source of truth for what to warm.** Sub0MemPage never derives byte ranges itself; the caller
-  (a MoE router's top-k output, Sub0Firn's own offset-resolver, or anything else) always supplies them.
+  (a MoE router's top-k output, Sub0TieredCache's own offset-resolver, or anything else) always supplies them.
 - **Not a remote-data client.** No HTTP Range requests, no pluggable remote sources — a region must be
-  addressable as a local file (optionally also mappable), so this stays entirely Sub0Firn's concern for
-  its own remote/HTTP tier. See `docs/sub0firn-reconciliation.md` D7.
+  addressable as a local file (optionally also mappable), so this stays entirely Sub0TieredCache's concern for
+  its own remote/HTTP tier. See `docs/sub0tieredcache-reconciliation.md` D7.
 - **Not an allocator, and never allocates bulk data storage.** It schedules and tracks residency of bytes
   landing in memory the *caller* allocated and owns (`docs/prior-art.md` §5a, `docs/design.md` §8) — it
   does not allocate destination storage itself, does not serve arbitrary key-value pairs, and is not a
@@ -96,13 +94,13 @@ precedent, and Sub0Llm's own Intel iGPU USM research is independently reinventin
 pin/release vocabulary today. Recorded as a proposed future direction, not yet researched or designed —
 see `docs/design.md` §9.
 
-## 2. How this relates to Sub0Firn
+## 2. How this relates to Sub0TieredCache
 
-Sub0Firn and Sub0MemPage are **two separate projects at two separate layers**, not the same thing under two
+Sub0TieredCache and Sub0MemPage are **two separate projects at two separate layers**, not the same thing under two
 names. Quoting the reconciliation's own headline conclusion (full point-by-point analysis in
-[docs/sub0firn-reconciliation.md](docs/sub0firn-reconciliation.md)):
+[docs/sub0tieredcache-reconciliation.md](docs/sub0tieredcache-reconciliation.md)):
 
-> Adopting Sub0MemPage beneath Sub0Firn would require **no change to any of Sub0Firn's R1–R10**, would
+> Adopting Sub0MemPage beneath Sub0TieredCache would require **no change to any of Sub0TieredCache's R1–R10**, would
 > leave `prefetch`/`wait`/`try_get`/`resolve_into`/`stats` implementable with their published contracts
 > intact, would **close** an existing undocumented `try_get` view-lifetime gap, and would leave the
 > HTTP/remote tier and all content semantics exactly where they already are.
@@ -110,11 +108,11 @@ names. Quoting the reconciliation's own headline conclusion (full point-by-point
 - **Kept identical, on purpose**: `prefetch`'s name and non-blocking contract, `wait`'s "blocks the calling
   thread only" guarantee, the "only `resolve`/`wait` may block on I/O" rule, coalescing of concurrent
   requests for overlapping ranges, `stats`' "observability only" framing.
-- **The one substantive divergence Sub0Firn's maintainer has to think about**: Sub0MemPage hands back a
+- **The one substantive divergence Sub0TieredCache's maintainer has to think about**: Sub0MemPage hands back a
   lease over a caller-owned slot under active reuse pressure, so it introduces explicit **pinning via
-  leases** — a concept Sub0Firn's own `resolve_into`/`try_get` contract can currently get away without,
+  leases** — a concept Sub0TieredCache's own `resolve_into`/`try_get` contract can currently get away without,
   because `resolve_into` copies and `try_get`'s zero-copy view has no documented lifetime rule at all (a
-  gap Sub0MemPage would close, not open, if Sub0Firn adopted it) — and it is a smaller divergence than the
+  gap Sub0MemPage would close, not open, if Sub0TieredCache adopted it) — and it is a smaller divergence than the
   original draft found, since `resolve`'s own destination-buffer shape is now the *same* shape
   `resolve_into` already has, one layer down.
 - **Additive, lower layer only**: a hard capacity fixed by the caller's own `register_slots` allocation,
@@ -122,18 +120,18 @@ names. Quoting the reconciliation's own headline conclusion (full point-by-point
   `wont_need`/`on_evict`; an optional inverted-control `open_stream`/`next` shape for a caller that can
   generate its own future access.
 - **Deliberately NOT in scope for Sub0MemPage**: `invalidate`, `version_tag`, dtype conversion — those stay
-  entirely Sub0Firn's job (D6); pluggable remote sources — HTTP Range stays entirely Sub0Firn's (D7).
+  entirely Sub0TieredCache's job (D6); pluggable remote sources — HTTP Range stays entirely Sub0TieredCache's (D7).
 
 Craig Hutchinson's own framing, quoted verbatim as the reason this is a separate project rather than a
-Sub0Firn-internal detail: *"Its actually possible this could be a tool that Sub0Firn could/should depend
-on using as there is some form of overlap here — Sub0Firn could be another use-case for the Sub0MemPage
+Sub0TieredCache-internal detail: *"Its actually possible this could be a tool that Sub0TieredCache could/should depend
+on using as there is some form of overlap here — Sub0TieredCache could be another use-case for the Sub0MemPage
 library."* Sub0Llm's own MoE-expert sidecar cache (`sub0::moeq::Store`/`ExpertCache`,
 `include/sub0/moe_quant.hpp`) is the other concrete, already-real use case — see
 [docs/sub0llm-consumer-trace.md](docs/sub0llm-consumer-trace.md).
 
 ## 3. API surface
 
-Given as an engine-agnostic contract, not C++ syntax — the style `Sub0Firn/README.md` §3 uses, and for
+Given as an engine-agnostic contract, not C++ syntax — the style `Sub0TieredCache/README.md` §3 uses, and for
 the same reason: an implementation should render this faithfully into whatever binding surface it
 exposes, but the contract itself is language-neutral. The full design rationale for every call below —
 including why each shape was chosen over the alternative precedents researched — lives in
@@ -296,4 +294,4 @@ The paging scheduler and transfer backend remain future packages in the implemen
 
 ## 7. License
 
-MIT — see [LICENSE.md](LICENSE.md), matching Sub0Firn's own choice.
+MIT — see [LICENSE.md](LICENSE.md), matching Sub0TieredCache's own choice.

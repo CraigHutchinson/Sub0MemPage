@@ -2,13 +2,13 @@
 
 Real systems, papers, and OS documentation researched before designing Sub0MemPage, fetched and cited
 directly rather than recalled from training data — the same discipline
-[Sub0Firn/docs/prior-art.md](https://github.com/CraigHutchinson/Sub0Firn/blob/main/docs/prior-art.md)
+[Sub0TieredCache/docs/prior-art.md](https://github.com/CraigHutchinson/Sub0TieredCache/blob/main/docs/prior-art.md)
 uses one layer up: verify against the actual reference source before designing against it, quote the
 source, don't paraphrase from memory. This document consolidates three separate research passes
 (OS/mmap mechanics, library-level API shapes, and on-this-machine empirical measurement) rather than
 re-deriving any of them.
 
-**This document does not repeat Sub0Firn's own prior-art table** (HugeCTR HPS, Bandana, TT-Rec,
+**This document does not repeat Sub0TieredCache's own prior-art table** (HugeCTR HPS, Bandana, TT-Rec,
 MoE-Infinity, DLRM hot/cold splitting, LMDB vs. RocksDB) — that table is about *what to cache and why* at
 the row/table layer; read it directly at the link above. This document is entirely about *how the bytes
 actually move* and *how a library exposes that mechanism* — the layer below it.
@@ -43,7 +43,7 @@ actually move* and *how a library exposes that mechanism* — the layer below it
 | **`posix_fadvise(POSIX_FADV_WILLNEED)` is explicitly documented as non-blocking** — the cleanest documented async-prefetch statement on either platform. | `man7.org/.../posix_fadvise.2`, verbatim: *"POSIX_FADV_WILLNEED initiates a nonblocking read of the specified region into the page cache."* Advice is non-binding: *"merely constitutes an expectation on behalf of the application."* | **High** |
 | **`madvise(MADV_WILLNEED)`'s blocking behaviour is NOT documented, and historically it did block** — two independent fetch passes (one in each source research stream) confirm the man page states no synchrony guarantee at all, only *"Expect access in the near future. (Hence, it might be a good idea to read some pages ahead.)"* Kernel-history evidence (title-only, not independently verified) reports a case going from 2.48s to 61µs when moved off the synchronous `MADV_WILLNEED` path. **Do not assume `MADV_WILLNEED` returns immediately** — this must be re-verified against kernel source before being relied upon. | `man7.org/.../madvise.2`. | **High** (man-page absence of a synchrony statement, confirmed independently twice); **Title-only** (the specific blocking-history numbers) |
 | **`MADV_POPULATE_READ` is the one honestly-documented "fault these in now" primitive** — it does not pretend to be async. Right call from a helper thread; wrong one inline. | `man7.org/.../madvise.2`, verbatim: *"faulting in all pages in the range just as if manually reading from each page."* | **High** |
-| **The default readahead wastes 128 KB per 4 KB fault under `MADV_NORMAL`** — helpful for this project's multi-MiB reads, pure waste for Sub0Firn's own 320-byte rows (an asymmetry worth being explicit about, since Sub0MemPage serves both shapes of caller). | CIDR 2022 paper, quoted in §4 below. | **High** |
+| **The default readahead wastes 128 KB per 4 KB fault under `MADV_NORMAL`** — helpful for this project's multi-MiB reads, pure waste for Sub0TieredCache's own 320-byte rows (an asymmetry worth being explicit about, since Sub0MemPage serves both shapes of caller). | CIDR 2022 paper, quoted in §4 below. | **High** |
 | **`io_uring` is the real async answer**: batched submission (many SQEs, one `io_uring_enter` call), completions gathered out of order, `IORING_SETUP_SQPOLL` for a kernel-side polling thread that eliminates the enter syscall entirely. | `man7.org/.../io_uring.7`, quoted verbatim in the source research. | **High** |
 | **Registered buffers cut per-I/O overhead but cannot register the mapping itself** — they must be anonymous, non-file-backed memory (`malloc`/`MAP_ANONYMOUS`), max 1 GiB each. This is architecturally load-bearing: an io_uring-backed Sub0MemPage implementation needs its own scratch arena as the read destination, it cannot register the region being managed. | `man7.org/.../io_uring_register.2`, quoted verbatim. | **High** |
 | **io_uring's exact maximum queue depth was not confirmed from a primary source** (commonly-cited 32768 SQEs is unverified) — irrelevant here since this project's real concurrency (10–500 in flight) is orders of magnitude below any plausible cap. | Absence of source, stated as such. | **None for the number; High for "the docs don't state it"** |
@@ -54,7 +54,7 @@ actually move* and *how a library exposes that mechanism* — the layer below it
 There is **no off-the-shelf "async prefetch scheduler with a working-set budget."** There are good
 *transport* libraries; the *policy* layer (what to warm, how much stays resident, what gets dropped) does
 not exist as a reusable component anywhere located in this research — every system surveyed that has one
-built it itself, mirroring Sub0Firn's own honest finding about HugeCTR HPS (the shape is standard, a
+built it itself, mirroring Sub0TieredCache's own honest finding about HugeCTR HPS (the shape is standard, a
 general reusable component is not).
 
 | Candidate | Verdict | Confidence |
@@ -201,10 +201,10 @@ Sub0MemPage's own implementation detail, invisible to the caller either way.
    the fault path would need to expose pointers into its own internal allocation for the caller to treat
    as stable across an async fill, which is a strictly harder lifetime problem than "the caller already
    has a pointer to memory it owns."
-4. **It is a *better* fit for `Sub0Firn`'s own contract than the alternative would have been**
-   (`sub0firn-reconciliation.md` D2): Sub0Firn's `resolve_into` already copies into a caller-owned buffer
-   today. Under this resolution, Sub0MemPage's `resolve` has *the same shape* Sub0Firn's `resolve_into`
-   already has, one layer down — not a new concept Sub0Firn has to learn to bridge to, but the same
+4. **It is a *better* fit for `Sub0TieredCache`'s own contract than the alternative would have been**
+   (`sub0tieredcache-reconciliation.md` D2): Sub0TieredCache's `resolve_into` already copies into a caller-owned buffer
+   today. Under this resolution, Sub0MemPage's `resolve` has *the same shape* Sub0TieredCache's `resolve_into`
+   already has, one layer down — not a new concept Sub0TieredCache has to learn to bridge to, but the same
    contract repeated at the layer beneath it.
 
 ## 6. Where the evidence is thin, or disagrees — stated honestly, not smoothed over

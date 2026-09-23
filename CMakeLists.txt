@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 # Detect if Sub0MemPage is being included inside another project (e.g. vendored into Sub0Llm or
-# Sub0Firn -- see README.md sec 2/5 for the intended integration seams).
+# Sub0TieredCache -- see README.md sec 2/5 for the intended integration seams).
 if(DEFINED PROJECT_NAME)
     set(IS_SUBPROJECT ON)
 endif()
@@ -18,7 +18,7 @@ if(SUB0MEMPAGE_BUILD_TESTING AND NOT IS_SUBPROJECT)
     enable_testing()
 endif()
 
-# Header-only, interface library -- the recommended first implementation shape, matching Sub0Firn's own
+# Header-only, interface library -- the recommended first implementation shape, matching Sub0TieredCache's own
 # CMakeLists.txt precedent one layer up: no working implementation exists yet (README.md's status line),
 # so this target currently exposes only the design-skeleton header in include/. Grows a real compiled
 # component only once the disk/network async-I/O machinery needs background-thread infrastructure
@@ -31,7 +31,7 @@ target_include_directories(Sub0MemPage INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
-# C++23, matching the Sub0 project family's own baseline (Sub0Llm, Sub0Firn, Sub0Log) -- see
+# C++23, matching the Sub0 project family's own baseline (Sub0Llm, Sub0TieredCache, Sub0Log) -- see
 # STYLE_GUIDE.md for why this is a hard requirement rather than a preference.
 target_compile_features(Sub0MemPage INTERFACE cxx_std_23)
 

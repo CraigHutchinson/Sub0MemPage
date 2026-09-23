@@ -4,7 +4,7 @@
 as a contract. This document covers the "why" — the full design synthesis behind that contract, the
 measured production defect that motivates the project, and the open questions the design deliberately
 does not paper over. Mirrors
-[Sub0Firn/docs/tiered-storage-design.md](https://github.com/CraigHutchinson/Sub0Firn/blob/main/docs/tiered-storage-design.md)'s
+[Sub0TieredCache/docs/tiered-storage-design.md](https://github.com/CraigHutchinson/Sub0TieredCache/blob/main/docs/tiered-storage-design.md)'s
 own role one layer up the stack.
 
 Status: **Implementation started.** See [implementation-plan.md](implementation-plan.md) for reviewed
@@ -24,7 +24,7 @@ contract corrections, package order and gates; the scheduler remains unimplement
   the caller allocated via `register_slots` (§8). Sub0MemPage has no concept of a row, a table, an index,
   a dtype, or a version, and it never allocates the memory a range's bytes land in. Translating
   `(table_id, row_index)` or `(layer, expert)` into a byte range — and sizing/typing the destination that
-  range's bytes fill — are both entirely the caller's job — the same boundary Sub0Firn already draws in
+  range's bytes fill — are both entirely the caller's job — the same boundary Sub0TieredCache already draws in
   its own R7 offset-resolver callback and its own `resolve_into`'s copy-into-caller-buffer contract,
   viewed from underneath it.
 - **In the secondary mmap mode only, every range is always legally readable.** Following CUDA's
@@ -93,12 +93,12 @@ library-owned one.** Two distinct real needs collapse into one call: the recover
 wasn't given in time," and the correct call for a caller with no useful look-ahead at all. Pinning exists
 because Sub0MemPage hands back a lease naming a slot *the caller allocated*, but whose content Sub0MemPage
 is actively managing (filling, potentially reusing for a different range once released) — a fundamentally
-different hazard than Sub0Firn's own two read paths, which both sidestep the lifetime question
+different hazard than Sub0TieredCache's own two read paths, which both sidestep the lifetime question
 (`resolve_into` copies; `try_get`'s zero-copy view has no documented lifetime rule at all, invisible today
-only because Sub0Firn's RAM tier is not yet budget-managed). Under this resolution, `resolve`'s shape is
+only because Sub0TieredCache's RAM tier is not yet budget-managed). Under this resolution, `resolve`'s shape is
 now the *same* shape `resolve_into` already has — a call that fills a caller-owned destination and hands
-back something the caller can safely use until it explicitly releases it — not a new concept Sub0Firn's
-maintainer has to learn. See `sub0firn-reconciliation.md` D2 for the full argument that adopting Sub0MemPage
+back something the caller can safely use until it explicitly releases it — not a new concept Sub0TieredCache's
+maintainer has to learn. See `sub0tieredcache-reconciliation.md` D2 for the full argument that adopting Sub0MemPage
 would *close*, not open, the gap `try_get`'s own undocumented lifetime rule leaves today.
 
 **`try_resolve` is deliberately pure — it never starts I/O on a miss.** RocksDB's own `TryAgain()` retry
@@ -117,7 +117,7 @@ limited to "make this range a lower-priority speculative-eviction candidate," no
 **`on_evict` is advisory-only and structurally cannot veto.** A veto-capable callback would place
 arbitrary caller code on the critical path of budget enforcement, where it could deadlock (by touching the
 region and faulting inside the veto itself) or stall every other thread sharing the region. Advisory-
-after-the-fact keeps the enforcement path bounded while still giving a higher layer — Sub0Firn, in
+after-the-fact keeps the enforcement path bounded while still giving a higher layer — Sub0TieredCache, in
 particular — the signal it needs to drop its own row-level index entries pointing into a range that just
 went away.
 
@@ -168,7 +168,7 @@ short because pinned slots alone fill the pool, **fail the call and say so** —
 
 Named explicitly because it's the most obvious alternative design and worth ruling out on the record, not
 just by omission. A veto callback (`on_evict` returning bool, "may I evict/reuse this?") would let a
-higher layer (Sub0Firn, say) refuse an eviction/reuse Sub0MemPage's own capacity accounting has already
+higher layer (Sub0TieredCache, say) refuse an eviction/reuse Sub0MemPage's own capacity accounting has already
 decided it needs — but the callback runs on Sub0MemPage's own enforcement path, inside whatever lock or
 bookkeeping structure decided the eviction was necessary in the first place. If the callback body touches
 the very slot under eviction (a realistic mistake, not a contrived one — a veto handler checking "is this
@@ -321,7 +321,7 @@ Carried in full from the source research, and deliberately not resolved by this 
 - **OQ7 — Sizing by measurement, not by guess.** An appropriate budget for any real deployment (the MoE
   sidecar, or any future consumer) is currently a guess. `stats`' `hint_unconsumed`/`resolve_misses`
   counters exist specifically so the first real run produces the trace that answers it, following
-  Bandana's own "simulate dozens of small caches" technique (Sub0Firn's own prior-art, cited by reference).
+  Bandana's own "simulate dozens of small caches" technique (Sub0TieredCache's own prior-art, cited by reference).
 - **Whether Windows' fault-path lock granularity for one section object under disjoint-page concurrent
   faults matches or differs from Linux's documented `mmap_lock` behaviour** is genuinely unknown — no
   Windows-side equivalent of the CIDR 2022 study was located, and this project's own empirical study
@@ -404,10 +404,10 @@ registered pointer are all only valid once the operation they're tied to complet
 weakened guarantee relative to those precedents — it is the same one they all make — but REQUIREMENTS.md
 R2 needs its wording narrowed to state which mode it covers, rather than reading as a universal claim.
 
-**A pleasant, unplanned convergence with `Sub0Firn`**: `sub0firn-reconciliation.md` D2 already noted that
-Sub0Firn's own `resolve_into` copies into a caller-owned buffer today, while `try_get`'s zero-copy path has
+**A pleasant, unplanned convergence with `Sub0TieredCache`**: `sub0tieredcache-reconciliation.md` D2 already noted that
+Sub0TieredCache's own `resolve_into` copies into a caller-owned buffer today, while `try_get`'s zero-copy path has
 an undocumented lifetime rule. Under this resolution, Sub0MemPage's own primary `resolve` call has *the
-same shape* `resolve_into` already has, one layer down — not a new concept Sub0Firn's maintainer has to
+same shape* `resolve_into` already has, one layer down — not a new concept Sub0TieredCache's maintainer has to
 learn to bridge to when adopting Sub0MemPage, but the same contract, repeated at the layer beneath it.
 
 Full sketch of what this looks like at the real consumer's actual call site: `sub0llm-consumer-trace.md`

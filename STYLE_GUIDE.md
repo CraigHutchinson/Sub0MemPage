@@ -1,14 +1,14 @@
 # Sub0MemPage Code Style Guide
 
-Sub0MemPage sits one layer below [Sub0Firn](https://github.com/CraigHutchinson/Sub0Firn) in this project
-family, so it follows Sub0Firn's own naming conventions rather than a different sibling project's — there
+Sub0MemPage sits one layer below [Sub0TieredCache](https://github.com/CraigHutchinson/Sub0TieredCache) in this project
+family, so it follows Sub0TieredCache's own naming conventions rather than a different sibling project's — there
 is no single "Sub0 house style" across the family (`Sub0Log`, for instance, follows `Sub0Pipeline`'s own,
 different convention) — so this document is self-contained rather than a deltas-only note, matching
-Sub0Firn's own `STYLE_GUIDE.md` precedent.
+Sub0TieredCache's own `STYLE_GUIDE.md` precedent.
 
 ## Naming
 
-- **Namespace**: lowercase, unnested — `sub0mempage::` (a sibling of `sub0firn::` and `sub0::`, not nested
+- **Namespace**: lowercase, unnested — `sub0mempage::` (a sibling of `sub0tieredcache::` and `sub0::`, not nested
   inside either; see README.md's naming section for why).
 - **Types**: `PascalCase` — e.g. `RegionHandle`, `PrefetchTicket`, `Lease`.
 - **Free functions**: `snake_case` — e.g. `register_region`, `try_resolve`, `wont_need`. Matches every
@@ -22,7 +22,7 @@ Sub0Firn's own `STYLE_GUIDE.md` precedent.
 
 Reach for a language feature before inventing a workaround, and prefer the newest form the project's
 standard supports. C++23 is a hard requirement (`CMakeLists.txt`'s `target_compile_features(...
-cxx_std_23)`), matching this whole project family's baseline (Sub0Llm, Sub0Firn, Sub0Log) — not a
+cxx_std_23)`), matching this whole project family's baseline (Sub0Llm, Sub0TieredCache, Sub0Log) — not a
 Sub0Llm-specific constraint carried over by habit, a deliberate choice for this project too. Prefer
 `std::optional`/`std::span`/`std::expected`-shaped return types over out-parameters and sentinel values —
 REQUIREMENTS.md's `resolve`→lease, `prefetch`→ticket, and `try_resolve`→`optional<lease>` contracts are
@@ -68,5 +68,5 @@ Matches R14's portability spirit and `CMakeLists.txt`'s interface-library shape:
 client must build with nothing beyond the C++23 standard library and the OS's own platform headers behind
 an `#if` guard. A future linked library, once one becomes genuinely necessary for real background-thread
 I/O machinery, may take on a real dependency (Boost.Asio, liburing) — that boundary is exactly why this
-project (like Sub0Firn) starts header-only and grows a compiled component only when the need is real, not
+project (like Sub0TieredCache) starts header-only and grows a compiled component only when the need is real, not
 speculative.

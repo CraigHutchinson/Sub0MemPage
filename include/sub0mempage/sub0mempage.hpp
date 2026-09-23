@@ -8,7 +8,7 @@
  *
  *  STATUS: DESIGN SKELETON, NOT A WORKING LIBRARY. Every declaration below is commented-out and
  *  unimplemented -- this file exists to pin the call surface's names and shapes as design decisions are
- *  finalized, matching Sub0Firn's own include/sub0firn/sub0firn.hpp skeleton-only precedent one layer up.
+ *  finalized, matching Sub0TieredCache's own include/sub0tieredcache/sub0tieredcache.hpp skeleton-only precedent one layer up.
  *  Do not add implementation code here without first checking README.md's status line and AGENTS.md
  *  Sec 10.
  */
@@ -19,7 +19,7 @@ namespace sub0mempage {
 // on_evict (and the optional open_stream/next pair) are not implemented yet -- REQUIREMENTS.md and
 // README.md sec 3 are the contract they will be built to. See docs/design.md for the full reasoning
 // behind each call's shape (sec 8 specifically for why destinations are caller-owned slots, not
-// library-owned memory), docs/sub0firn-reconciliation.md for how this contract composes with Sub0Firn's
+// library-owned memory), docs/sub0tieredcache-reconciliation.md for how this contract composes with Sub0TieredCache's
 // own API one layer up, and docs/sub0llm-consumer-trace.md for how Sub0Llm's real ExpertCache /
 // ParallelExperts decode loop would call this contract once it exists -- including the separation
 // between encoded input staging and ExpertCache's decoded float output storage.

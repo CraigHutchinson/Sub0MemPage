@@ -1,7 +1,7 @@
 # Sub0Llm consumer trace
 
 This document traces Sub0MemPage's design against Sub0Llm's real, already-merged code — the same
-discipline [Sub0Firn/docs/reference-consumer-sub0llm.md](https://github.com/CraigHutchinson/Sub0Firn/blob/main/docs/reference-consumer-sub0llm.md)
+discipline [Sub0TieredCache/docs/reference-consumer-sub0llm.md](https://github.com/CraigHutchinson/Sub0TieredCache/blob/main/docs/reference-consumer-sub0llm.md)
 uses one layer up, applied here to Sub0MemPage's own first real, concrete consumer: Sub0Llm's MoE-expert
 sidecar cache. Nothing in this document is hypothetical — every code reference is to files that exist and
 are merged in `D:\Craig\GitHub\Sub0Llm` today, and every number is from a real measurement (either the
