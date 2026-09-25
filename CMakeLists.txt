@@ -38,6 +38,14 @@ target_compile_features(Sub0MemPage INTERFACE cxx_std_23)
 find_package(Threads REQUIRED)
 target_link_libraries(Sub0MemPage INTERFACE Threads::Threads)
 
+# Test support for consumers (Sub0TieredCache's suites): the deterministic fake FillBackend. A
+# transport test double only, never a correctness oracle for a consumer's own results.
+add_library(Sub0MemPageTesting INTERFACE)
+add_library(Sub0MemPage::testing ALIAS Sub0MemPageTesting)
+target_include_directories(Sub0MemPageTesting INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/testing/include>)
+target_link_libraries(Sub0MemPageTesting INTERFACE Sub0MemPage)
+
 if(SUB0MEMPAGE_BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
     add_subdirectory(tests)
 endif()

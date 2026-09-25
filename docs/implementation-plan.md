@@ -123,3 +123,21 @@ Open design questions carried forward:
 - Slot storage alignment is not validated; M3 unbuffered I/O needs sector alignment.
 - `wait(ticket)` and `Claim::wait()` are asymmetric shapes.
 
+
+## Checkpoint: dev loop + M3 slice 1 (2026-09-25, cloud session)
+
+Worked in a shared Linux container (GCC 13, clang 18 + libc++, qemu-user 8.2), not the dedicated machine.
+
+| M2 handover item | State |
+|---|---|
+| 1. `bench --aa` noise floor | Script path now runs end to end (contention gate, `--aa`, `--baseline`, report). Only ADVISORY rows were taken here, and none were committed. The G-PERF 1.05 threshold stays provisional until a dedicated-machine run. |
+| 2. Contended `try_resolve` lead | Not re-measured; container timings are not evidence. Still open. |
+| 3. ARM coverage | `dev.py arm` and the `arm-qemu` CI job: plain build and tests pass under qemu-aarch64. ASan (interceptor segfault) and TSan (unsupported VMA range) do not run under qemu-user and are recorded as SKIP. |
+| 4. MSVC ASan | `ci-msvc-asan` preset and `msvc-asan` CI job. Verified only by CI (PR #1). |
+| 5. CI TSan | `tsan` job + `ci-tsan` preset. The clang job now builds against libc++; it had been red since M2. |
+| 6. M3 | Slice 1 landed: `local_file_backend.hpp`, a portable worker-pool backend (POSIX `pread`; Windows positional overlapped `ReadFile` with a per-worker event). Real-file parity against an `ifstream` oracle, canaries, EOF clipping, truncated-after-registration, queue-full and shutdown cases: 76 checks, plus 2 mutants (13/13 killed). io_uring/IOCP remain later optimizations behind the same seam. |
+| 7. `feature/usm-plan-groundwork` | Untouched; still for its owner. |
+
+Next for M3: the native async backends (io_uring, IOCP) and their measurements on the dedicated machine; a macOS
+CI run of the worker backend (covered by `build-macos`); an exported `sub0mempage::testing` target for
+the fake backend (Sub0TieredCache T0 feedback).

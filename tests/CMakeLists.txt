@@ -3,7 +3,7 @@ find_package(Threads REQUIRED)
 # One portable offline test executable per file; warnings are errors on every toolchain.
 function(sub0mempage_add_test name source)
     add_executable(${name} ${source} allocation_counter.cpp)
-    target_link_libraries(${name} PRIVATE Sub0MemPage::Sub0MemPage Threads::Threads)
+    target_link_libraries(${name} PRIVATE Sub0MemPage::Sub0MemPage Sub0MemPage::testing Threads::Threads)
     if(MSVC)
         target_compile_options(${name} PRIVATE /W4 /WX)
     else()

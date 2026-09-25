@@ -92,6 +92,7 @@ this job as unverified until it has actually run in CI at least once.
 
 ## Not yet covered (see the M2 checkpoint in implementation-plan.md)
 
+- Consumers link `Sub0MemPage::testing` for the deterministic fake backend (`testing/include/sub0mempage/testing/fake_backend.hpp`), a transport double only.
 - The G-PERF 5% threshold is provisional until a `bench --aa` run on the dedicated machine measures
   the noise floor. A `bench --aa --allow-contention` run in this shared, non-dedicated container
   (2026-09-25) triggered a G-PERF FAIL on one microbenchmark (`try_resolve_hit_64slots`, ratio 1.131)

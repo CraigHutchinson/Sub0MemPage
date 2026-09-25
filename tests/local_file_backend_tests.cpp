@@ -40,7 +40,7 @@ using sub0mempage::test::run;
 namespace fs = std::filesystem;
 
 /// Deterministic on-disk content generator. Deliberately a different formula from
-/// tests/fake_backend.hpp's source_byte, so a defect that accidentally reused fake-backend state instead
+/// sub0mempage/testing/fake_backend.hpp's source_byte, so a defect that accidentally reused fake-backend state instead
 /// of really reading the file cannot hide behind matching numbers.
 [[nodiscard]] constexpr std::byte file_byte(std::uint64_t offset) noexcept {
     return static_cast<std::byte>((offset * 0x9E3779B1u ^ (offset >> 5)) & 0xffu);

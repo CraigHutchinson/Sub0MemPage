@@ -4,6 +4,7 @@ Check this table before edits or hardware runs. Also check Sub0Llm's log on the 
 
 | Date | Owner | Scope | Status | Hardware |
 |---|---|---|---|---|
+| 2026-09-25 | Claude (cloud) | Dev loop (ARM qemu, TSan/MSVC ASan CI, clang libc++), M3 slice 1 local-file backend; Sub0TieredCache T0/T1/T3 in parallel | PR #1 | None (shared container, no perf evidence) |
 | 2026-09-25 | Claude | M2: cached-slot + explicit-destination state machines, deterministic fake backend, portable tests (new headers under include/sub0mempage/, tests/) | done (handover: implementation-plan.md M2 checkpoint) | None held |
 | 2026-09-22 | Codex | M0 contract/Intel review, M1 optional capability diagnostic and offline tests; naming deferred by user | done | Small serial builds and inventory only; no performance measurements |
 

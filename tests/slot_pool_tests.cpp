@@ -1,6 +1,6 @@
 // M2 cached-slot gates (docs/transfer-contract.md "Portable test gates"), driven by FakeBackend.
 
-#include "fake_backend.hpp"
+#include <sub0mempage/testing/fake_backend.hpp>
 #include "test_support.hpp"
 
 #include <sub0mempage/slot_pool.hpp>

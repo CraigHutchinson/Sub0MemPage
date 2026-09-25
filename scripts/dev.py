@@ -214,7 +214,7 @@ def stage_mutate() -> list[dict]:
                 continue
             target.write_text(text.replace(mutant["find"], mutant["replace"], 1), encoding="utf-8")
             binary = work / "mutant"
-            compiled = run([cxx, "-std=c++23", "-O1", f"-I{include}", f"-I{ROOT / 'tests'}",
+            compiled = run([cxx, "-std=c++23", "-O1", f"-I{include}", f"-I{ROOT / 'testing' / 'include'}", f"-I{ROOT / 'tests'}",
                             str(ROOT / "tests" / mutant["test"]), str(ROOT / "tests" / "allocation_counter.cpp"),
                             "-o", str(binary), "-pthread"])
             if compiled.returncode != 0:
