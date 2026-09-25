@@ -2,10 +2,13 @@
 
 Current design: [transfer and lifetime contract](docs/transfer-contract.md), [NVIDIA storage](docs/nvidia-gds.md), and [three-project delivery plan](../Sub0Llm/docs/STORAGE_STACK_PLAN.md). GPU transport and the paging scheduler remain planned. The host-slot API below is conceptual; device endpoints follow the transfer contract.
 
-Status: **M2 — draft state machines, no real I/O backend yet.** `slot_pool.hpp` (cached slots) and
+Status: **M3 in progress — a real local-file backend exists.** `slot_pool.hpp` (cached slots) and
 `transfer_set.hpp` (explicit destinations) implement the bookkeeping, admission, lease and completion
-contract. They are proven only against a deterministic fake backend. No file backend exists yet (M3), so
-nothing reads a real file. Signatures are drafts until M3 has exercised them.
+contract; both are proven against a deterministic fake backend and, now, against
+[`local_file_backend.hpp`](include/sub0mempage/local_file_backend.hpp)'s portable worker-pool reader over
+real files (POSIX `pread`, Windows overlapped `ReadFile` unverified on real hardware -- see the
+[implementation plan](docs/implementation-plan.md)). io_uring/IOCP acceleration and the CUDA/USM
+transports remain future work. Signatures are drafts until every M3+ backend has exercised them.
 [Implementation plan](docs/implementation-plan.md) gives the ordered packages and acceptance gates;
 [Intel USM decision](docs/intel-usm.md) defines the optional diagnostic and future adapter boundary.
 REQUIREMENTS.md remains the normative target contract, not a claim that every requirement is implemented.

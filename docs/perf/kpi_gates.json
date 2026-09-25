@@ -16,7 +16,8 @@
       "threshold": {
         "sub0mempage.probe-options": 28,
         "sub0mempage.slot-pool": 82,
-        "sub0mempage.transfer-set": 39
+        "sub0mempage.transfer-set": 39,
+        "sub0mempage.local-file-backend": 76
       },
       "severity": "hard",
       "_note": "A count change nobody can attribute is an unexplained behaviour change. Intended changes: re-record with `dev.py test --accept-counts` in the commit that adds the checks."
