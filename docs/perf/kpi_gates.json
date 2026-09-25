@@ -1,0 +1,55 @@
+{
+  "_doc": "Gates for Sub0MemPage's development loop (scripts/dev.py). Policy: docs/DEVELOPMENT_WORKFLOW.md. Shape follows Sub0Llm's docs/optimization/kpi_gates.json.",
+  "_severity": "hard = must not land on main if it fails; soft = tracked, warning only. A hard perf failure means park behind a default-off toggle, never revert (Sub0Llm docs/OPTIMIZATION_PROCESS.md sec 3).",
+  "gates": [
+    {
+      "id": "G-TESTS",
+      "label": "every CTest suite passes on each platform",
+      "stage": "test",
+      "severity": "hard"
+    },
+    {
+      "id": "G-SUITE",
+      "label": "per-suite check counts exactly as recorded",
+      "stage": "test, sanitize",
+      "op": "eq",
+      "threshold": {
+        "sub0mempage.probe-options": 28,
+        "sub0mempage.slot-pool": 82,
+        "sub0mempage.transfer-set": 39
+      },
+      "severity": "hard",
+      "_note": "A count change nobody can attribute is an unexplained behaviour change. Intended changes: re-record with `dev.py test --accept-counts` in the commit that adds the checks."
+    },
+    {
+      "id": "G-SANITIZE",
+      "label": "ASan+UBSan and TSan clean, tests repeated",
+      "stage": "sanitize",
+      "severity": "hard"
+    },
+    {
+      "id": "G-MUTANTS",
+      "label": "every mutant in scripts/mutants.json is killed",
+      "stage": "mutate",
+      "severity": "hard"
+    },
+    {
+      "id": "G-ALLOC",
+      "label": "zero allocations inside benchmark timed regions",
+      "stage": "bench",
+      "op": "eq",
+      "threshold": 0,
+      "severity": "hard",
+      "_note": "REQUIREMENTS.md R4/R9 and Sub0Llm AGENTS.md sec 1: hot paths never allocate."
+    },
+    {
+      "id": "G-PERF",
+      "label": "no bookkeeping regression beyond the noise floor",
+      "stage": "bench --baseline",
+      "op": "lte",
+      "threshold": 1.05,
+      "severity": "hard",
+      "_note": "Ratio candidate/baseline of median ns/op, interleaved rounds, uncontended host. PROVISIONAL until an --aa run measures this host's noise floor."
+    }
+  ]
+}

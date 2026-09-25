@@ -104,3 +104,12 @@ guess (see OQ7 in design.md §7).
 Implementation began at the user's request on 2026-09-22. README.md distinguishes working experimental
 diagnostics from the still-unimplemented paging scheduler. Update the plan and validation evidence as
 each package lands; do not describe a capability query as a working residency backend.
+
+## 11. Use the codified loop, not hand-run checks
+
+`python scripts/dev.py check` (tests on Windows and Linux, ASan+UBSan, TSan, mutation) runs before every
+commit. `dev.py bench --baseline main` runs before any performance claim. Gates live in
+`docs/perf/kpi_gates.json`; the policy is in `docs/DEVELOPMENT_WORKFLOW.md`. The rule was established on
+2026-09-25, when the mutation stage's first run found a vacuous admission test that every other gate
+had passed.
+

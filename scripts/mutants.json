@@ -1,0 +1,27 @@
+{
+  "_doc": "Deliberate defects the test suites MUST detect (scripts/dev.py mutate). Each names one invariant from docs/transfer-contract.md; a surviving mutant means that gate is vacuous. When code moves, update `find`: a stale mutant fails the stage rather than silently passing.",
+  "mutants": [
+    {"id": "pinned-slot-evictable", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "if (candidate.pins != 0) {", "replace": "if (false) {"},
+    {"id": "filling-slot-evictable", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "        if (candidate.state != SlotState::ready) {\n            continue;", "replace": "        if (false) {\n            continue;"},
+    {"id": "short-read-published", "file": "transfer.hpp", "test": "slot_pool_tests.cpp",
+     "find": "return result.bytes == requested ? Status::ok : Status::short_read;", "replace": "return Status::ok;"},
+    {"id": "stale-completion-accepted", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "slots_[token.index].generation != token.generation ||", "replace": "false ||"},
+    {"id": "try-resolve-partial-pin", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "    if (!all_ready) {\n        return std::unexpected(Status::not_resident);", "replace": "    if (false) {\n        return std::unexpected(Status::not_resident);"},
+    {"id": "resolve-no-unwind", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "            unpin_locked(lease.slot_);\n            lease.pool_ = nullptr;", "replace": "            lease.pool_ = nullptr;"},
+    {"id": "speculative-ages-residents", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "            if (admission == AdmissionClass::declared) {\n                candidate.referenced = false;\n            }", "replace": "            candidate.referenced = false;"},
+    {"id": "ticket-record-freed-while-pending", "file": "slot_pool.hpp", "test": "slot_pool_tests.cpp",
+     "find": "    --tickets_held_;\n    if (record.pending == 0) {", "replace": "    --tickets_held_;\n    if (true) {"},
+    {"id": "claim-overlap-ignored", "file": "transfer_set.hpp", "test": "transfer_set_tests.cpp",
+     "find": "            return std::unexpected(Status::busy);", "replace": "            (void)0;"},
+    {"id": "dropped-claim-frees-pending-range", "file": "transfer_set.hpp", "test": "transfer_set_tests.cpp",
+     "find": "    if (record.state != RecordState::submitted) {\n        record.state = RecordState::free;", "replace": "    if (true) {\n        record.state = RecordState::free;"},
+    {"id": "claim-stale-completion-accepted", "file": "transfer_set.hpp", "test": "transfer_set_tests.cpp",
+     "find": "records_[token.index].generation != token.generation ||", "replace": "false ||"}
+  ]
+}

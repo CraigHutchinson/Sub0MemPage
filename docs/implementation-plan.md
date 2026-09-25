@@ -88,3 +88,38 @@ claim is part of M1. Coordinate hardware runs with Sub0Llm's active work log.
 The reviewed plan and optional inventory are implemented. [Validation](validation/2026-09-22/README.md)
 records offline Windows/Linux tests, sanitizer coverage, the actual Intel report and remaining limits.
 M2 is next; M3–M7 remain unimplemented. The [shared plan](../../Sub0Llm/docs/STORAGE_STACK_PLAN.md) defines upper-layer acceptance and feedback.
+
+## Checkpoint: M2 draft (2026-09-25), handover for the next session
+
+**Done.** Both state machines are implemented over one backend seam, header-only, with no hot-path
+allocation: `slot_pool.hpp` (cached slots, CLOCK admission, leases, tickets) and `transfer_set.hpp`
+(explicit-destination claims). They are proven against a deterministic fake backend on MSVC and GCC,
+under ASan+UBSan and TSan, with 11/11 mutants killed. Evidence and the defects caught are in
+[validation/2026-09-25](validation/2026-09-25/README.md). The development loop is codified in
+[DEVELOPMENT_WORKFLOW.md](DEVELOPMENT_WORKFLOW.md) (`scripts/dev.py`, `docs/perf/kpi_gates.json`).
+
+**Not done, in suggested order for a session on a dedicated (uncontended) machine:**
+
+1. Run `dev.py bench --aa` to measure the noise floor. Replace the provisional G-PERF 1.05 threshold
+   with a measured one and commit the first `perf_history.jsonl` rows. `dev.py bench` has not yet run
+   end to end: its contention gate, A/B path and report writer are untested.
+2. Re-measure the contended `try_resolve` lead properly (one pool mutex serialises hit-path readers).
+   Decide whether hit-path scaling matters before M3's consumers exist. Sub0Llm decode is the
+   motivating case, with up to 10 resolving threads.
+3. Add ARM coverage: a QEMU user-mode stage in `dev.py` (`g++-aarch64-linux-gnu` + `qemu-user` in WSL;
+   run `test` and `sanitize`, since ASan works under qemu-user with caveats and TSan usually does not).
+   It checks correctness only, never perf. Record which sanitizers qualify under emulation.
+4. Wire MSVC `/fsanitize=address`, or record why not (the ASan runtime DLL must be on the test PATH).
+5. Add a CI TSan job alongside the existing ASan job.
+6. Start M3: the local-file host transport (Windows overlapped I/O / IOCP, Linux io_uring or a
+   worker pool), real-file parity against a synchronous read oracle, and the canary/EOF/unaligned cases
+   in transfer-contract.md.
+7. Decide `feature/usm-plan-groundwork` (Codex). It forked before main's Intel rework, and its
+   `tools/intel_usm` staged-copy probe was never merged; main carries `tools/intel` instead. It is
+   pushed as-is for its owner to reconcile. Merging it wholesale would regress main.
+
+Open design questions carried forward:
+- R18's cross-instance guard (one allocation in both modes) is unenforced.
+- Slot storage alignment is not validated; M3 unbuffered I/O needs sector alignment.
+- `wait(ticket)` and `Claim::wait()` are asymmetric shapes.
+
