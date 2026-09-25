@@ -5,13 +5,17 @@ Policy: docs/DEVELOPMENT_WORKFLOW.md. Gates: docs/perf/kpi_gates.json. Shape bor
 scripts/run_perf_suite.py (contention gate, interleaved arms, history + report), which learned its rules
 the hard way; read Sub0Llm's docs/OPTIMIZATION_PROCESS.md for why each rule exists.
 
-Stages (each independently runnable; `check` = test + sanitize + mutate):
+Stages (each independently runnable; `check` = test + sanitize + mutate + arm):
 
   test      Release build + CTest, warnings as errors. Windows (MSVC) and Linux (GCC, via WSL on a
             Windows host). Per-suite check counts are compared EXACTLY against kpi_gates.json.
   sanitize  Linux ASan+UBSan and TSan builds, every test repeated, any report fails the stage.
   mutate    Applies each mutant in scripts/mutants.json to a copy of include/ and requires the named
             test to fail (or hang, killed by timeout). A surviving mutant means a gate is vacuous.
+  arm       Cross-builds for aarch64 (cmake/toolchains/aarch64-linux-gnu.cmake) and runs under
+            qemu-aarch64 user-mode emulation: correctness only, never perf. No cross toolchain/qemu ->
+            SKIP, never PASS. ASan/TSan are attempted; a sanitizer qemu-user cannot support is recorded
+            as SKIP with the real emulator error, not as a library defect (see docs/DEVELOPMENT_WORKFLOW.md).
   bench     Contention-gated microbenchmarks; with --baseline REF, interleaved A/B against the library
             headers at REF. Appends docs/perf/perf_history.jsonl and rewrites docs/perf/perf_report.md.
 
@@ -68,6 +72,18 @@ CONFIGS = {
                   "-DCMAKE_CXX_FLAGS=-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
                   "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"], SAN_ENV),
     "gcc-tsan": (["-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_CXX_FLAGS=-O1 -g -fsanitize=thread",
+                  "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread"], SAN_ENV),
+}
+
+# aarch64 cross-build via cmake/toolchains/aarch64-linux-gnu.cmake, run through qemu-user. Correctness
+# only -- an emulated timing is never a measurement of the target (AGENTS.md rule 4/8), so no perf here.
+ARM_TOOLCHAIN = ROOT / "cmake" / "toolchains" / "aarch64-linux-gnu.cmake"
+ARM_CONFIGS = {
+    "arm-release": (["-DCMAKE_BUILD_TYPE=Release"], {}),
+    "arm-asan": (["-DCMAKE_BUILD_TYPE=Debug",
+                  "-DCMAKE_CXX_FLAGS=-O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer",
+                  "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined"], SAN_ENV),
+    "arm-tsan": (["-DCMAKE_BUILD_TYPE=Debug", "-DCMAKE_CXX_FLAGS=-O1 -g -fsanitize=thread",
                   "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=thread"], SAN_ENV),
 }
 
@@ -208,6 +224,95 @@ def stage_mutate() -> list[dict]:
                 killed, how = True, "hang (timeout)"
             results.append({"id": mutant["id"], "ok": killed, "detected_by": how})
             log(f"[mutate] {mutant['id']}: {'killed' if killed else 'SURVIVED'} ({how})")
+    return results
+
+
+def arm_tools_available() -> tuple[bool, str]:
+    missing = [tool for tool in ("aarch64-linux-gnu-g++", "qemu-aarch64") if not shutil.which(tool)]
+    if missing:
+        return False, ("missing " + ", ".join(missing) + " (apt-get install -y g++-aarch64-linux-gnu qemu-user)")
+    return True, ""
+
+
+def configure_and_build_arm(name: str) -> tuple[pathlib.Path, str | None]:
+    args, _ = ARM_CONFIGS[name]
+    build = build_root() / name
+    cmake = ["cmake", "-S", str(ROOT), "-B", str(build), f"-DCMAKE_TOOLCHAIN_FILE={ARM_TOOLCHAIN}", *args,
+             "-DSUB0MEMPAGE_BUILD_BENCHMARKS=OFF"]
+    if shutil.which("ninja"):
+        cmake += ["-G", "Ninja"]
+    configured = run(cmake)
+    if configured.returncode != 0:
+        return build, "configure failed:\n" + configured.stdout[-3000:] + configured.stderr[-3000:]
+    built = run(["cmake", "--build", str(build), "--parallel"])
+    if built.returncode != 0:
+        errors = [line for line in (built.stdout + built.stderr).splitlines() if re.search(r"error|warning", line)]
+        return build, "build failed:\n" + "\n".join(errors[:40])
+    return build, None
+
+
+def run_ctest_arm(name: str, build: pathlib.Path) -> dict:
+    """Like run_ctest, but the emulator's own crash signatures count as a real failure, and a
+    sanitizer that qemu-user cannot support (see stage_arm) is distinguished from a defect it caught."""
+    _, env = ARM_CONFIGS[name]
+    started = time.monotonic()
+    result = run(["ctest", "--test-dir", str(build), "-V"], env=env, timeout=600)
+    names = dict(re.findall(r"^\s*Start\s+(\d+):\s+(\S+)", result.stdout, re.M))
+    checks = {}
+    for number, total, failures in re.findall(r"^(\d+): (\d+) checks, (\d+) failures", result.stdout, re.M):
+        checks[names.get(number, number)] = {"checks": int(total), "failures": int(failures)}
+    emulator_broken = re.findall(r"(qemu: uncaught target signal|FATAL: ThreadSanitizer: unsupported)",
+                                 result.stdout + result.stderr)
+    sanitizer = re.findall(r"(ERROR: AddressSanitizer|WARNING: ThreadSanitizer|runtime error:|ERROR: LeakSanitizer)",
+                           result.stdout + result.stderr)
+    return {"config": name, "ok": result.returncode == 0 and not sanitizer and not emulator_broken,
+            "emulator_broken": bool(emulator_broken), "returncode": result.returncode, "suites": checks,
+            "seconds": round(time.monotonic() - started, 1), "tail": (result.stdout + result.stderr)[-3000:]}
+
+
+def stage_arm() -> list[dict]:
+    """Cross-builds for aarch64 (cmake/toolchains/aarch64-linux-gnu.cmake, Ubuntu's
+    g++-aarch64-linux-gnu) and runs the suite under qemu-aarch64 user-mode emulation. Correctness
+    only: an emulated timing is never a measurement of the target, so no perf numbers are taken here
+    (AGENTS.md rule 4/8). Missing cross toolchain or qemu -> a single SKIP row, never a silent PASS.
+    ASan/UBSan and TSan are attempted; qemu-user is known not to guarantee either (shadow-memory and
+    VMA-layout assumptions the emulator does not satisfy) -- a failure there is recorded as SKIP with
+    the real emulator output, not conflated with a library defect. Only arm-release's plain build/test
+    (which does exercise this library's actual code under emulation) can fail this stage."""
+    available, reason = arm_tools_available()
+    if not available:
+        return [{"config": "arm", "ok": True, "skipped": reason}]
+    results: list[dict] = []
+    build, error = configure_and_build_arm("arm-release")
+    if error:
+        results.append({"config": "arm-release", "ok": False, "error": error})
+        log(f"[arm-release] {error}")
+    else:
+        outcome = run_ctest_arm("arm-release", build)
+        results.append(outcome)
+        log(f"[arm-release] {'PASS' if outcome['ok'] else 'FAIL'} {outcome['suites']}")
+    for name in ("arm-asan", "arm-tsan"):
+        build, error = configure_and_build_arm(name)
+        if error:
+            results.append({"config": name, "ok": True, "skipped": "did not build under the cross "
+                            "toolchain: " + error[:500]})
+            log(f"[{name}] SKIP (build): {error[:200]}")
+            continue
+        outcome = run_ctest_arm(name, build)
+        if outcome["ok"]:
+            results.append(outcome)
+            log(f"[{name}] PASS (works under qemu-user) {outcome['suites']}")
+        elif outcome["emulator_broken"] and not outcome["suites"]:
+            # Only a crash before any suite reported counts as "qemu cannot run this sanitizer"; once
+            # a test body has run, a crash is signal and falls through to FAIL below.
+            results.append({"config": name, "ok": True,
+                            "skipped": f"unsupported under qemu-user: {outcome['tail'][-600:]}"})
+            log(f"[{name}] SKIP: unsupported under qemu-user emulation")
+        else:
+            # returned cleanly (not an emulator crash signature) but a test genuinely failed/reported --
+            # that is real signal even under emulation, so it counts.
+            results.append(outcome)
+            log(f"[{name}] FAIL {outcome['suites']}")
     return results
 
 
@@ -424,7 +529,7 @@ def accept_counts(results: list[dict]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("stage", choices=["test", "sanitize", "mutate", "check", "bench"])
+    parser.add_argument("stage", choices=["test", "sanitize", "mutate", "arm", "check", "bench"])
     parser.add_argument("--native-only", action="store_true", help="do not delegate Linux stages to WSL")
     parser.add_argument("--json-out", help="write the stage result as JSON (used by WSL delegation)")
     parser.add_argument("--accept-counts", action="store_true", help="re-record G-SUITE check counts")
@@ -439,7 +544,7 @@ def main() -> int:
 
     gates = json.loads(GATES.read_text(encoding="utf-8"))
     outcome: dict = {"stage": args.stage}
-    stages = ["test", "sanitize", "mutate"] if args.stage == "check" else [args.stage]
+    stages = ["test", "sanitize", "mutate", "arm"] if args.stage == "check" else [args.stage]
     delegate = IS_WINDOWS and not args.native_only
     have_wsl = delegate and wsl_available()
 
@@ -454,6 +559,8 @@ def main() -> int:
             native = stage_build_test(["gcc-asan", "gcc-tsan"], repeat=args.repeat)
         elif stage == "mutate" and not IS_WINDOWS:
             native = stage_mutate()
+        elif stage == "arm" and not IS_WINDOWS:
+            native = stage_arm()
         linux: list = []
         if delegate:
             if have_wsl:
@@ -472,14 +579,16 @@ def main() -> int:
         gates = json.loads(GATES.read_text(encoding="utf-8"))
     problems = check_counts(test_like, gates)
     failed = [f"{stage}: {r.get('config') or r.get('id')} -- {r.get('error') or r.get('skipped') or 'failed'}"
-              for stage in ("test", "sanitize", "mutate") for r in outcome.get(stage, []) if not r.get("ok")]
+              for stage in ("test", "sanitize", "mutate", "arm") for r in outcome.get(stage, []) if not r.get("ok")]
     if "bench" in outcome and not outcome["bench"].get("ok"):
         failed.append(f"bench: {outcome['bench'].get('error', 'hard gate failed; see docs/perf/perf_report.md')}")
 
     log("\n== summary ==")
-    for stage in ("test", "sanitize", "mutate"):
+    for stage in ("test", "sanitize", "mutate", "arm"):
         for r in outcome.get(stage, []):
-            state = "PASS" if r.get("ok") else ("SKIP" if r.get("skipped") else "FAIL")
+            # skipped takes precedence over ok: some skips (e.g. a sanitizer qemu-user cannot run)
+            # carry ok=True so they do not fail `check`, and must still print as SKIP, never PASS.
+            state = "SKIP" if r.get("skipped") else ("PASS" if r.get("ok") else "FAIL")
             detail = r.get("suites") or r.get("detected_by") or r.get("skipped") or r.get("error", "")
             log(f"  {stage:9} {str(r.get('config') or r.get('id')):28} {state}  {detail}")
     if "bench" in outcome and "record" in outcome["bench"]:
