@@ -34,11 +34,12 @@ Reviewed 2026-09-22. Implementation is authorized; the paging API remains a draf
 |---|---|---|
 | M0 | Correct contracts, consumer trace and Intel scope in this repository | No raw/decoded aliasing; no physical-residency or GPU-access inference |
 | M1 | Optional `tools/intel` capability executable; offline CLI tests used by that executable | Default build has no SYCL dependency; strict Intel Level Zero selection; six aspects, actual identity and explicit untested states; Windows/Linux portable tests |
-| M2 | Bounded slot state machine, consumed by a deterministic fake-I/O scheduler fixture | Empty/filling/ready/failed states; generation-checked tickets; move-only leases; duplicate/overlap coalescing; rollback on batch failure; exhaustion and no hot-path allocations |
-| M3 | Async local-file workers feeding M2: Windows overlapped I/O and Linux backend | Real files and short reads; errors and cancellation; concurrent overlap; complete draining before unregister/destruction; both OSes tested |
-| M4 | Sub0Llm raw-byte adapter and Sub0TieredCache local-tier example | Encoded-byte parity with direct file reads; decoded outputs unchanged; explicit extra raw-pool budget; benchmark against current consumer |
-| M5 | Optional caller-owned USM transfer adapter | Context/allocation validation; host/device ownership transitions; completion-before-reuse tests; async errors; independent Windows/Linux capability results |
-| M6 | Policy and overlap tuning, then optional mmap hints | Measured hit/miss and unconsumed-hint counts; bounded memory/queues; uncontended interleaved baselines; no unsupported hard mmap residency claim |
+| M2 | Bounded cached-slot and explicit-destination state machines; deterministic fake backend | Generation, admission, exact completion, cancellation and final-consumer lifetime gates in [transfer contract](transfer-contract.md) |
+| M3 | Local-file host transport on Windows/Linux; portable worker baseline for macOS | Real-file parity, short reads, drain, bounded resources; record each platform independently |
+| M4 | Optional staged CUDA transport, consumed by TieredCache T2 and Llm S2 | Host/device endpoint checks, bounded staging, delayed consumer events, errors and device parity |
+| M5 | Optional Intel USM adapter | Allocation/context validation, explicit copy, completion/final-use ownership; per-platform capability qualification |
+| M6 | Optional native-Linux NVIDIA cuFile/GDS | [NVIDIA gates](nvidia-gds.md), staged prerequisite, observed route, exact counts, failure and fallback parity |
+| M7 | Policy and overlap tuning | Whole-stack measurements against existing consumers; no physical-residency inference |
 
 M1 begins implementation without pretending the paging scheduler exists. It only inventories aspects;
 allocation tests, prepared-copy execution, direct Level Zero extension inventory, mapping import and
@@ -86,4 +87,4 @@ claim is part of M1. Coordinate hardware runs with Sub0Llm's active work log.
 
 The reviewed plan and optional inventory are implemented. [Validation](validation/2026-09-22/README.md)
 records offline Windows/Linux tests, sanitizer coverage, the actual Intel report and remaining limits.
-M2 is next; M3–M6 remain unimplemented. Naming was explicitly deferred by the user.
+M2 is next; M3–M7 remain unimplemented. The [shared plan](../../Sub0Llm/docs/STORAGE_STACK_PLAN.md) defines upper-layer acceptance and feedback.

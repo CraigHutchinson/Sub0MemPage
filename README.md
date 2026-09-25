@@ -1,5 +1,7 @@
 # Sub0MemPage — asynchronous, proactive paging orchestration over memory-mapped regions
 
+Current design: [transfer and lifetime contract](docs/transfer-contract.md), [NVIDIA storage](docs/nvidia-gds.md), and [three-project delivery plan](../Sub0Llm/docs/STORAGE_STACK_PLAN.md). GPU transport and the paging scheduler remain planned. The host-slot API below is conceptual; device endpoints follow the transfer contract.
+
 Status: **IMPLEMENTATION STARTED — experimental capability diagnostics first.** The paging API in
 `include/sub0mempage/sub0mempage.hpp` remains a design skeleton; no residency scheduler ships yet.
 [Implementation plan](docs/implementation-plan.md) gives the ordered packages and acceptance gates;

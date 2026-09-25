@@ -1,5 +1,7 @@
 # Prior art
 
+NVIDIA primary sources and applicability limits are recorded in [nvidia-gds.md](nvidia-gds.md).
+
 Real systems, papers, and OS documentation researched before designing Sub0MemPage, fetched and cited
 directly rather than recalled from training data — the same discipline
 [Sub0TieredCache/docs/prior-art.md](https://github.com/CraigHutchinson/Sub0TieredCache/blob/main/docs/prior-art.md)

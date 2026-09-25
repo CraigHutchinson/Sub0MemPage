@@ -1,5 +1,7 @@
 # Sub0MemPage — design rationale
 
+Design revision S1: [transfer-contract.md](transfer-contract.md) governs endpoint domains, explicit destinations, completion and final-consumer ownership; [nvidia-gds.md](nvidia-gds.md) adds staged CUDA and qualified native-Linux GDS. Host-slot examples below do not imply CPU access to device memory.
+
 **Companion doc**: [README.md](../README.md) covers the "what" — the scope statement and the API surface
 as a contract. This document covers the "why" — the full design synthesis behind that contract, the
 measured production defect that motivates the project, and the open questions the design deliberately

@@ -30,7 +30,7 @@ requirement forbids (`docs/design.md` §8, `docs/prior-art.md` §5a).
 `docs/design.md` §8), a caller may dereference any address inside that mapping at any time, whether or not
 `prefetch`, `resolve`, or any other call has ever been made for that range. The worst case is the page
 fault the caller would have taken with no Sub0MemPage in the picture at all. This guarantee does NOT
-extend to the primary caller-slot mode: there, a slot's destination bytes are readable only while a successful `resolve` or `try_resolve`
+extend to the cached caller-slot mode: there, a slot's destination bytes are readable only while a successful `resolve` or `try_resolve`
 lease is held. `wait` reports fill completion but does not pin a slot against reuse — the same contract every real precedent researched for
 caller-owned destinations makes (a POSIX `aiocb`'s `aio_buf`, a `DSTORAGE_REQUEST::Destination`, a
 `cuFile`-registered pointer are all only valid once their own operation completes), not a weaker one."
@@ -45,11 +45,12 @@ latency** — this is the property that makes the secondary mode safe to adopt i
 existing mapping-based code (unchanged from the original intent); the primary mode makes a different,
 equally standard promise instead (R3, R8).
 
-## R3. Only `resolve` and `wait` may block on I/O
+## R3. Only `resolve` and `wait` may block on I/O during steady-state use
 
 "`resolve` and `wait` are the only calls in the API that may block the calling thread on I/O. `prefetch`,
-`try_resolve`, `wont_need`, `release`, and `stats` must never block on I/O. No other call implicitly
-triggers a synchronous fetch."
+`try_resolve`, `wont_need`, `release`, and `stats` must never block on I/O. No other steady-state call implicitly
+triggers a synchronous fetch. Registration/open/close are explicit administrative operations and may
+block; close must never hide inside ordinary lease release."
 
 Mirrors Sub0TieredCache's own R2 exactly, one layer down — the same load-bearing guarantee a caller with a
 no-heap-allocation/bounded-latency hot-path rule (Sub0Llm's `AGENTS.md` §1, the real motivating case) needs
@@ -186,7 +187,8 @@ batched maintenance* (`docs/prior-art.md` §5d). That three-way convergence is t
 ## R13. Concurrent requests for overlapping ranges coalesce into one real fetch
 
 "Overlapping concurrent requests normalize to fixed slot-sized source chunks, clipped at EOF. While
-a chunk is filling or resident, requests share that fill rather than fetch the chunk independently.
+a chunk is filling or resident in the same immutable source generation and compatible destination
+domain, requests share that fill rather than fetch the chunk independently.
 A multi-chunk range yields segmented leases; re-fetch after eviction or failure is allowed."
 
 Refines Sub0TieredCache's own R5 into fixed source-chunk coalescing, and the real motivating consumer (Sub0Llm's `ParallelExperts`,
@@ -211,6 +213,36 @@ OS cooperation is needed to mark a caller-owned slot reusable, since nothing has
 anywhere, only overwritten on the next fill. `wont_need` and the hard cap keep their full documented
 strength in the primary mode on every platform; OQ1 is a real, unresolved gap only for a caller that
 opts into the secondary mode.
+
+For explicit destinations, successful transfer completion establishes byte validity; the caller
+retains its destination claim through final consumption. Cached-slot leases and explicit claims
+are distinct ownership modes (R18).
+
+## R15. Registered endpoints identify memory domain and legal access
+
+Every destination records allocation kind, extent, device/context and access permissions. Unsupported
+pairings fail registration; CPU code never dereferences a device-only destination. No ordinary mapping
+becomes device-accessible by registration alone. See [transfer-contract.md](docs/transfer-contract.md).
+
+## R16. Completion and final use both precede reuse
+
+Exact completed byte count plus backend status establishes transfer success; enqueue success does not.
+All source/destination registrations, parameter storage and completion records survive pending work.
+A timeout/cancellation request cannot release in-flight storage. Consumer leases survive the last GPU
+read event; ordinary release never performs device synchronization or SDK deregistration.
+
+## R17. Fallback is explicit and bounded
+
+Requested and observed transfer paths, fallback reason and unknown status are visible. A direct-only
+request fails if direct operation cannot be qualified. Staging consumes declared capacity and must not
+silently allocate more. Managed pool bounds do not claim to bound OS or unknown driver-internal memory.
+
+## R18. There is one replacement owner per allocation
+
+The cached-byte facade owns its slots' reuse. An explicit-destination transfer instead holds a claim
+on a caller-reserved range; the caller owns cache policy. Both use one scheduler. These modes cannot
+manage the same allocation concurrently. Explicit destinations enable contiguous row/gather outputs;
+coalescing does not promise one transfer into distinct destinations/devices.
 
 ## Open questions carried as requirements-with-caveats, not silently resolved
 
