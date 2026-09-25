@@ -19,13 +19,22 @@ jobs:
           - compiler: clang
             cc: clang
             cxx: clang++
+            # Ubuntu's clang 18 cannot use libstdc++'s <expected> (it gates on __cpp_concepts >= 202002),
+            # so the clang job builds against libc++.
+            cxxflags: -stdlib=libc++
+            packages: libc++-18-dev libc++abi-18-dev
     steps:
       - uses: actions/checkout@v4
+      - name: Install packages
+        if: matrix.packages
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
       - name: Configure
         run: cmake --preset ci-unix
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
+          CXXFLAGS: ${{ matrix.cxxflags }}
+          LDFLAGS: ${{ matrix.cxxflags }}
       - name: Build
         run: cmake --build --preset ci-unix
       - name: Test
@@ -66,3 +75,48 @@ jobs:
         run: cmake --build --preset ci-asan
       - name: Test
         run: ctest --preset ci-asan
+
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (TSan)
+        run: cmake --preset ci-tsan
+        env:
+          CC: gcc
+          CXX: g++
+      - name: Build
+        run: cmake --build --preset ci-tsan
+      - name: Test
+        run: ctest --preset ci-tsan
+
+  msvc-asan:
+    # UNVERIFIED LOCALLY: no Windows host to run this on (see docs/DEVELOPMENT_WORKFLOW.md). Keep an
+    # eye on the first real run. /RTC is off (ci-msvc-asan builds Release, which carries no /RTC flags
+    # -- MSVC ASan and /RTC cannot be combined). ilammy/msvc-dev-cmd puts the ASan runtime DLL
+    # (clang_rt.asan*.dll) on PATH for ctest, matching cl.exe's own copy of it.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure (MSVC ASan)
+        run: cmake --preset ci-msvc-asan
+      - name: Build
+        run: cmake --build --preset ci-msvc-asan
+      - name: Test
+        run: ctest --preset ci-msvc-asan
+
+  arm-qemu:
+    # Correctness only (cmake/toolchains/aarch64-linux-gnu.cmake, cross g++ + qemu-user emulation).
+    # No perf numbers are ever taken under emulation; see docs/DEVELOPMENT_WORKFLOW.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install aarch64 cross toolchain + qemu-user
+        run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu qemu-user
+      - name: Configure
+        run: cmake -S . -B build-arm -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/aarch64-linux-gnu.cmake -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-arm --parallel
+      - name: Test (under qemu-aarch64)
+        run: ctest --test-dir build-arm -V

@@ -115,3 +115,35 @@ Sub0TieredCache claims its three-platform baseline; worker I/O can block, caller
 GPU tests use deterministic bytes plus a readback/check kernel and injected delayed consumer events.
 Mocks validate the protocol; only real hardware can qualify a vendor path. Never count skipped hardware
 tests as passes. Allocation/registration failures must leave every surviving resource drainable.
+
+## M3 slice 1: local-file backend
+
+[`local_file_backend.hpp`](../include/sub0mempage/local_file_backend.hpp) is the first real
+`FillBackendRef` implementation: a portable, bounded worker-pool reader over files registered ahead of
+time (POSIX `pread`; Windows overlapped `ReadFile` used synchronously, written to compile under MSVC but
+not yet built/run there -- see docs/implementation-plan.md's M3 row). Two decisions worth stating here
+because they are not obvious from the backend contract alone:
+
+- **Unknown `SourceId` at submit time.** Looked up in a bounded table under the same lock as the queue
+  (no allocation, no I/O). A miss is never reported by returning `false` from `submit()`: that return
+  value's meaning is fixed by the backend contract as "the bounded queue is full," and SlotPool/TransferSet
+  translate it specifically into `Status::queue_exhausted`, so reusing it here would misreport a
+  registration mistake as transient backpressure. The request is accepted instead (still exactly one
+  terminal delivery) and a worker delivers `Status::invalid_argument` once dequeued, never inline in
+  `submit()`.
+- **Shutdown.** `shutdown()` refuses further submits, delivers `Status::cancelled` for every request still
+  queued and not yet picked up by a worker (one delivery each), lets any request a worker has already
+  started finish normally (its ordinary ok/short_read/io_error delivery), then joins every worker thread.
+  The destructor calls it if the caller has not already, so a backend never outlives a worker still
+  writing into a caller's destination -- but calling it explicitly first lets the caller choose exactly
+  when in-flight writes stop, per "Unregister/close fails busy or explicitly drains" above.
+
+Every read, short or failed, reports `status = Status::ok` with the actual byte count achieved (matching
+`tests/fake_backend.hpp`'s own convention): `detail::classify_fill` is the single place, shared by
+SlotPool and TransferSet, that turns "ok but fewer bytes than requested" into `Status::short_read`, so a
+short read -- whether from a genuine EOF or a file truncated after registration -- is never published as
+resident however it was discovered. This backend does ordinary buffered I/O (no `O_DIRECT`/unbuffered
+reads), so it does not need the slot-storage alignment the "Checkpoint: M2 draft" open question raises;
+that question still applies to any future unbuffered/GDS-style backend. `io_uring` (Linux) and
+IOCP/`CreateThreadpoolIo` (Windows) are named, deferred optimizations behind this same seam, not a silent
+limitation -- see docs/prior-art.md sec 1-2 and the backend's own file comment.

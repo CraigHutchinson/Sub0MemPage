@@ -90,7 +90,9 @@ Result measure(const char* name, int samples, Body&& body) {
         }
         n *= 4;
     }
-    Result result{.name = name, .ops_per_sample = n};
+    // GCC 13 (unlike 14+/MSVC) warns -Wmissing-field-initializers on a partial designated
+    // initializer even though C++20 zero-inits the rest; list every member to build clean there too.
+    Result result{.name = name, .ns_per_op = 0.0, .samples = {}, .ops_per_sample = n, .allocations = 0};
     for (int i = 0; i < samples; ++i) {
         const std::uint64_t allocs_before = allocation_count();
         const auto start = BenchClock::now();

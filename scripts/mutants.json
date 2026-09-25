@@ -22,6 +22,12 @@
     {"id": "dropped-claim-frees-pending-range", "file": "transfer_set.hpp", "test": "transfer_set_tests.cpp",
      "find": "    if (record.state != RecordState::submitted) {\n        record.state = RecordState::free;", "replace": "    if (true) {\n        record.state = RecordState::free;"},
     {"id": "claim-stale-completion-accepted", "file": "transfer_set.hpp", "test": "transfer_set_tests.cpp",
-     "find": "records_[token.index].generation != token.generation ||", "replace": "false ||"}
+     "find": "records_[token.index].generation != token.generation ||", "replace": "false ||"},
+    {"id": "unknown-source-not-reported", "file": "local_file_backend.hpp", "test": "local_file_backend_tests.cpp",
+     "find": "item.request.sink.deliver(item.request.token, {.status = Status::invalid_argument, .bytes = 0});",
+     "replace": "item.request.sink.deliver(item.request.token, {.status = Status::ok, .bytes = 0});"},
+    {"id": "eof-read-loops-forever", "file": "local_file_backend.hpp", "test": "local_file_backend_tests.cpp",
+     "find": "        if (got == 0) {\n            break; // EOF before the requested count: report what was actually read (see below)\n        }",
+     "replace": "        if (false) {\n            break; // EOF before the requested count: report what was actually read (see below)\n        }"}
   ]
 }

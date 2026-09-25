@@ -7,3 +7,6 @@ build-asan/
 *.suo
 .vs/
 CMakeUserPresets.json
+
+# Agent worktrees
+.claude/worktrees/
