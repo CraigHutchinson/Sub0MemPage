@@ -18,7 +18,7 @@ from real measurement mistakes. Read that document for the reasoning; this one c
 | How noisy is this host? | `python scripts/dev.py bench --aa` | (records the noise floor) |
 
 On a Windows host the Linux stages re-invoke the script inside WSL (`SUB0MEMPAGE_WSL_DISTRO`, default
-`Ubuntu-24.04`). WSL builds live on ext4 (`~/.cache/sub0mempage-dev`), not the slower Windows mount.
+`Ubuntu-24.04`). WSL builds live on ext4 (`~/.cache/sub0mempage-dev/<checkout hash>`), not the slower Windows mount.
 Windows builds live in `build/dev/`. A platform that cannot run reports **SKIP**, never PASS. The
 summary lists every configuration; a skipped platform has not been verified.
 

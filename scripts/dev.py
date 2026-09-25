@@ -31,6 +31,7 @@ is native and the Windows stages report "skipped", never "passed".
 from __future__ import annotations
 
 import argparse
+import hashlib
 import datetime
 import io
 import json
@@ -105,7 +106,10 @@ def build_root() -> pathlib.Path:
     """Out-of-tree on Linux (ext4, not the 9p Windows mount); under build/dev on Windows."""
     if IS_WINDOWS:
         return ROOT / "build" / "dev"
-    return pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "sub0mempage-dev"
+    # Keyed by checkout: CMake refuses a build dir configured from another source tree, and several
+    # checkouts (worktrees, parallel agents) share one cache directory.
+    key = hashlib.sha1(str(ROOT.resolve()).encode()).hexdigest()[:8]
+    return pathlib.Path(os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")) / "sub0mempage-dev" / key
 
 
 def linux_cxx() -> str | None:
