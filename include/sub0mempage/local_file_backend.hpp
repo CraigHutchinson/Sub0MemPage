@@ -166,7 +166,9 @@ private:
     };
 
     void worker_loop();
-    void perform(WorkItem& item);
+    /// `event` (Windows only) is the calling worker's own manual-reset event; each overlapped read
+    /// waits on it rather than on the shared file handle (see perform()).
+    void perform(WorkItem& item, void* event);
     [[nodiscard]] NativeFileHandle find_source_locked(SourceId source) const noexcept;
     static void close_handle(NativeFileHandle handle) noexcept;
 
@@ -298,6 +300,23 @@ inline bool LocalFileBackend::submit(const FillRequest& request) noexcept {
 }
 
 inline void LocalFileBackend::worker_loop() {
+#ifdef _WIN32
+    // One event per worker: several workers read the same overlapped handle concurrently, and with a
+    // null OVERLAPPED.hEvent GetOverlappedResult waits on the file handle itself, which any of those
+    // reads can signal ("Use of file handles for this purpose is discouraged", Win32 OVERLAPPED docs).
+    // A null event here is not fatal: perform() reports io_error for every read this worker takes.
+    const HANDLE event = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    struct EventCloser {
+        HANDLE handle;
+        ~EventCloser() {
+            if (handle != nullptr) {
+                ::CloseHandle(handle);
+            }
+        }
+    } const closer{event};
+#else
+    void* const event = nullptr;
+#endif
     for (;;) {
         WorkItem item;
         {
@@ -311,11 +330,11 @@ inline void LocalFileBackend::worker_loop() {
             --ring_size_;
             ++stats_.in_flight; // still under the lock: visible to stats() the instant this item starts
         }
-        perform(item);
+        perform(item, event);
     }
 }
 
-inline void LocalFileBackend::perform(WorkItem& item) {
+inline void LocalFileBackend::perform(WorkItem& item, [[maybe_unused]] void* event) {
     if (!item.source_known) {
         // Unknown SourceId, decided at submit() time; see the file comment. Never inline in submit().
         item.request.sink.deliver(item.request.token, {.status = Status::invalid_argument, .bytes = 0});
@@ -331,9 +350,14 @@ inline void LocalFileBackend::perform(WorkItem& item) {
     std::size_t remaining = item.request.destination.size();
 
 #ifdef _WIN32
+    if (event == nullptr) {
+        status = Status::io_error;
+        remaining = 0;
+    }
     while (remaining > 0) {
         const std::uint64_t pos = item.request.source_offset + total;
         OVERLAPPED overlapped{};
+        overlapped.hEvent = static_cast<HANDLE>(event); // manual-reset; ReadFile resets it on entry
         overlapped.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFull);
         overlapped.OffsetHigh = static_cast<DWORD>(pos >> 32);
         const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(remaining, (std::numeric_limits<DWORD>::max)()));
