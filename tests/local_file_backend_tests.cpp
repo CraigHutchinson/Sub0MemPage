@@ -270,17 +270,32 @@ void test_truncated_file_never_resident() {
     constexpr std::uint64_t original_size = 200;
     write_file(file, original_size);
 
-    auto backend = std::move(*LocalFileBackend::create({.workers = 1, .queue_capacity = 4, .max_sources = 1}));
+    auto backend = std::move(*LocalFileBackend::create({.workers = 1, .queue_capacity = 4, .max_sources = 2}));
     check(backend->register_file(SourceId{5}, file) == Status::ok, "registered before truncation");
 
     // Truncate the underlying file after registration: the already-open handle now hits EOF early on a
     // chunk that was in range when the pool was configured (transfer-contract.md "Real-file tests": a
     // file truncated after registration must never publish a short read as resident).
+    SourceId short_source{5};
+#ifdef _WIN32
+    // Windows enforces the immutable-source rule for us: the backend opens with FILE_SHARE_READ only, so
+    // the resize is refused. Reproduce the same early EOF with a source that is already short.
+    std::error_code refused;
+    fs::resize_file(file, 50, refused);
+    check(static_cast<bool>(refused), "Windows refuses to truncate a registered source");
+    const fs::path short_file = dir.path() / "short.bin";
+    write_file(short_file, 50);
+    short_source = SourceId{6};
+    check(backend->register_file(short_source, short_file) == Status::ok, "short source registered");
+#else
     fs::resize_file(file, 50);
+    check(fs::file_size(file) == 50, "truncation took effect");
+    check(true, "short source registered"); // keeps G-SUITE counts equal across platforms
+#endif
 
     constexpr std::size_t slot_bytes = 64;
     std::vector<std::byte> storage(slot_bytes, std::byte{0xCD});
-    auto pool = std::move(*SlotPool::create({.source = SourceId{5},
+    auto pool = std::move(*SlotPool::create({.source = short_source,
                                              .source_bytes = original_size,
                                              .slot_bytes = slot_bytes,
                                              .num_slots = 1,

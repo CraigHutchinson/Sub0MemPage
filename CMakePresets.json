@@ -76,6 +76,7 @@
             "binaryDir": "${sourceDir}/build-msvc-asan",
             "cacheVariables": {
                 "CMAKE_CXX_FLAGS": "/DWIN32 /D_WINDOWS /GR /EHsc /fsanitize=address /Zi",
+                "CMAKE_EXE_LINKER_FLAGS": "/DEBUG",
                 "SUB0MEMPAGE_BUILD_TESTING": "ON",
                 "SUB0MEMPAGE_BUILD_EXAMPLES": "OFF"
             },

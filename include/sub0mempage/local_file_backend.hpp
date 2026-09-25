@@ -82,7 +82,8 @@ namespace sub0mempage {
 
 #ifdef _WIN32
 using NativeFileHandle = HANDLE;
-inline constexpr NativeFileHandle kInvalidFileHandle = INVALID_HANDLE_VALUE;
+// Not constexpr: INVALID_HANDLE_VALUE is a pointer cast, which MSVC rejects in a constant expression.
+inline const NativeFileHandle kInvalidFileHandle = INVALID_HANDLE_VALUE;
 #else
 using NativeFileHandle = int;
 inline constexpr NativeFileHandle kInvalidFileHandle = -1;
