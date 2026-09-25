@@ -6,43 +6,29 @@
  *         implement. See docs/design.md for the reasoning behind each call's shape, including sec 8's
  *         ownership-model resolution (caller-owned destination slots) this header's names reflect.
  *
- *  STATUS: DESIGN SKELETON, NOT A WORKING LIBRARY. Every declaration below is commented-out and
- *  unimplemented -- this file exists to pin the call surface's names and shapes as design decisions are
- *  finalized, matching Sub0TieredCache's own include/sub0tieredcache/sub0tieredcache.hpp skeleton-only precedent one layer up.
- *  Do not add implementation code here without first checking README.md's status line and AGENTS.md
- *  Sec 10.
+ *  STATUS: umbrella header. The M2 draft implementations live in slot_pool.hpp (cached-slot mode) and
+ *  transfer_set.hpp (explicit-destination mode), both over the backend seam in transfer.hpp. The call
+ *  surface below is the README sec 3 contract. Each call names where it is implemented, or that it is
+ *  deferred.
  */
+
+#include "slot_pool.hpp"
+#include "transfer_set.hpp"
 
 namespace sub0mempage {
 
-// Skeleton. register_region/register_slots/prefetch/wait/resolve/release/try_resolve/wont_need/stats/
-// on_evict (and the optional open_stream/next pair) are not implemented yet -- REQUIREMENTS.md and
-// README.md sec 3 are the contract they will be built to. See docs/design.md for the full reasoning
-// behind each call's shape (sec 8 specifically for why destinations are caller-owned slots, not
-// library-owned memory), docs/sub0tieredcache-reconciliation.md for how this contract composes with Sub0TieredCache's
-// own API one layer up, and docs/sub0llm-consumer-trace.md for how Sub0Llm's real ExpertCache /
-// ParallelExperts decode loop would call this contract once it exists -- including the separation
-// between encoded input staging and ExpertCache's decoded float output storage.
+// README.md sec 3 contract -> M2 draft implementation:
 //
-// Ownership model, stated once here because it shapes every signature below (docs/design.md sec 8,
-// docs/prior-art.md sec 5a): Sub0MemPage NEVER allocates bulk destination storage. The caller allocates
-// register_slots' backing array itself; Sub0MemPage only tracks which byte range currently lives in
-// which slot and schedules the async fills that keep that true.
+//   register_region + register_slots   -> SlotPool::create(SlotPoolConfig{source, slot_storage, ...})
+//   prefetch(pool, ranges[], class)    -> SlotPool::prefetch -> Ticket
+//   wait(ticket, deadline?)            -> SlotPool::wait -> WaitOutcome
+//   resolve / try_resolve              -> SlotPool::resolve / try_resolve -> leases into caller storage
+//   release(lease)                     -> Lease::reset / destructor
+//   wont_need / stats                  -> SlotPool::wont_need / stats
+//   explicit-destination transfers     -> TransferSet::submit -> Claim (transfer-contract.md)
+//   on_evict, open_stream/next         -> deferred: no consumer yet
 //
-// Intended call surface (README.md sec 3), named here as a design-skeleton reference only:
-//
-//   register_region(backing, policy_hints)                       -> region_handle
-//   register_slots(region, slot_bytes, num_slots, slots_ptr)      -> pool_handle
-//   prefetch(pool, ranges[], class)                                -> ticket
-//   wait(ticket, deadline?)                                        -> outcome
-//   resolve(pool, ranges[], class)                                 -> lease[]
-//   release(lease)
-//   try_resolve(pool, ranges[], class)                             -> optional<lease[]>
-//   wont_need(pool, ranges[])
-//   stats(pool)                                                    -> { ... }
-//   on_evict(pool, callback)                                        // optional
-//
-//   open_stream(pool, next_range_callback, private_data)           -> stream_handle   // optional second shape
-//   next(stream_handle)                                             -> lease           // optional second shape
+// Ownership (docs/design.md sec 8): Sub0MemPage never allocates bulk destination storage; callers
+// register their own slot/destination memory and Sub0MemPage schedules fills and tracks residency.
 
 } // namespace sub0mempage

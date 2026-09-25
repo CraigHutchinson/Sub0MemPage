@@ -2,8 +2,10 @@
 
 Current design: [transfer and lifetime contract](docs/transfer-contract.md), [NVIDIA storage](docs/nvidia-gds.md), and [three-project delivery plan](../Sub0Llm/docs/STORAGE_STACK_PLAN.md). GPU transport and the paging scheduler remain planned. The host-slot API below is conceptual; device endpoints follow the transfer contract.
 
-Status: **IMPLEMENTATION STARTED — experimental capability diagnostics first.** The paging API in
-`include/sub0mempage/sub0mempage.hpp` remains a design skeleton; no residency scheduler ships yet.
+Status: **M2 — draft state machines, no real I/O backend yet.** `slot_pool.hpp` (cached slots) and
+`transfer_set.hpp` (explicit destinations) implement the bookkeeping, admission, lease and completion
+contract. They are proven only against a deterministic fake backend. No file backend exists yet (M3), so
+nothing reads a real file. Signatures are drafts until M3 has exercised them.
 [Implementation plan](docs/implementation-plan.md) gives the ordered packages and acceptance gates;
 [Intel USM decision](docs/intel-usm.md) defines the optional diagnostic and future adapter boundary.
 REQUIREMENTS.md remains the normative target contract, not a claim that every requirement is implemented.
