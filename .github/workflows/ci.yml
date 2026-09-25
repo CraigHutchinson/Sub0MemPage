@@ -19,13 +19,22 @@ jobs:
           - compiler: clang
             cc: clang
             cxx: clang++
+            # Ubuntu's clang 18 cannot use libstdc++'s <expected> (it gates on __cpp_concepts >= 202002),
+            # so the clang job builds against libc++.
+            cxxflags: -stdlib=libc++
+            packages: libc++-18-dev libc++abi-18-dev
     steps:
       - uses: actions/checkout@v4
+      - name: Install packages
+        if: matrix.packages
+        run: sudo apt-get update && sudo apt-get install -y ${{ matrix.packages }}
       - name: Configure
         run: cmake --preset ci-unix
         env:
           CC: ${{ matrix.cc }}
           CXX: ${{ matrix.cxx }}
+          CXXFLAGS: ${{ matrix.cxxflags }}
+          LDFLAGS: ${{ matrix.cxxflags }}
       - name: Build
         run: cmake --build --preset ci-unix
       - name: Test
