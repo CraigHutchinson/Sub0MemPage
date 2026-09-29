@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.21)
+project(MemPageConsumer LANGUAGES CXX)
+add_subdirectory("${MEMPAGE_SOURCE_DIR}" mempage)
+if(SUB0MEMPAGE_BUILD_TESTING OR TARGET sub0mempage-slot-pool-tests)
+  message(FATAL_ERROR "Embedding MemPage unexpectedly enabled its standalone tests")
+endif()
+add_executable(consumer main.cpp)
+target_link_libraries(consumer PRIVATE Sub0MemPage::Sub0MemPage)

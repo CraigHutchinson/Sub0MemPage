@@ -21,3 +21,13 @@ target_include_directories(sub0mempage-probe-options-tests PRIVATE "${PROJECT_SO
 sub0mempage_add_test(sub0mempage-slot-pool-tests slot_pool_tests.cpp)
 sub0mempage_add_test(sub0mempage-transfer-set-tests transfer_set_tests.cpp)
 sub0mempage_add_test(sub0mempage-local-file-backend-tests local_file_backend_tests.cpp)
+
+add_test(NAME sub0mempage.consumer-defaults
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE=${PROJECT_SOURCE_DIR}"
+        "-DBINARY=${CMAKE_CURRENT_BINARY_DIR}/consumer"
+        "-DGENERATOR=${CMAKE_GENERATOR}"
+        "-DCOMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCONFIG=$<CONFIG>"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_consumer.cmake")
+set_tests_properties(sub0mempage.consumer-defaults PROPERTIES TIMEOUT 120)

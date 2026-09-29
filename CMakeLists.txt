@@ -10,7 +10,12 @@ project(Sub0MemPage VERSION 0.1.0 LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
-option(SUB0MEMPAGE_BUILD_TESTING  "Build unit-tests" ON)
+# Embedding a library must not silently add its standalone tests to the parent's build.
+set(_sub0mempage_testing_default ON)
+if(IS_SUBPROJECT)
+    set(_sub0mempage_testing_default OFF)
+endif()
+option(SUB0MEMPAGE_BUILD_TESTING "Build unit-tests" ${_sub0mempage_testing_default})
 option(SUB0MEMPAGE_BUILD_EXAMPLES "Build examples"   OFF)
 option(SUB0MEMPAGE_BUILD_BENCHMARKS "Build bookkeeping microbenchmarks (scripts/dev.py bench)" OFF)
 option(SUB0MEMPAGE_BUILD_INTEL_USM_PROBE "Build optional Intel SYCL capability inventory" OFF)
