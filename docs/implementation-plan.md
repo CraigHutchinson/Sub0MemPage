@@ -141,3 +141,21 @@ Worked in a shared Linux container (GCC 13, clang 18 + libc++, qemu-user 8.2), n
 Next for M3: the native async backends (io_uring, IOCP) and their measurements on the dedicated machine; a macOS
 CI run of the worker backend (covered by `build-macos`); an exported `sub0mempage::testing` target for
 the fake backend (Sub0TieredCache T0 feedback).
+
+## Coordination refresh: 2026-09-29
+
+Fetched current remotes and checked open PRs: none remain open in the three projects. Published
+MemPage `213acdd` and TieredCache `e4da6a7` have successful CI at those exact heads. Llm's E1
+adapter fixture is merged on local main, but its local main is ahead of origin; published three-project
+reproducibility is still a release gate. The historical fixture acceptance does not close model parity.
+
+The next shared package is **S1b, the CPU MoE byte adapter**, owned by Sub0Llm and using MemPage's
+existing local-file backend/explicit destination claims. See the updated
+[shared handoff](../../Sub0Llm/docs/STORAGE_STACK_PLAN.md#next-s1b-routed-moe-byte-adapter)
+for consumers, lifetime, real-sidecar tests and delivery gates. Keep the current lower pins unless an
+upper fixture demonstrates a missing contract; fix and test that contract below, then advance upward.
+TieredCache supplies row-regression coverage when lower semantics change, without imposing a row cache
+on a byte-only MoE consumer. Its invalidation uses retiring/current transfer bindings over shared
+storage with exclusive per-range claims; future R18 enforcement must preserve that legitimate pattern.
+Native I/O tuning, Intel/GDS qualification and GPU row caches are separate subsequent packages.
+This refresh ran no builds or hardware measurements; CI and historical local results remain distinct.
