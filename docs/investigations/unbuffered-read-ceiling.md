@@ -68,6 +68,17 @@ raw_copy_probe <file> 10 1500 262144                # ideal pool, shared vs per-
 bw_hog 14 60 & miss_probe <file> 10 1000 1766400 262144 1   # under DRAM load
 ```
 
+### Update 2026-10-01: a one-command reproduction, and the cold-miss consequence
+
+`tools/read_shootout` reproduces the symptom on a single miss, using a 256 MiB generated file and no
+model file, and races the alternatives (README there). Cold, the number of non-cached requests per row
+sets that row's latency, whether the requests run on parallel threads or in one IoRing submission:
+28 x 64 KiB takes ~3.5 ms, 7 x 256 KiB ~1.8 ms, and 1 x 2 MiB ~0.7 ms.
+
+So the plateau is a per-request cost, with no overlap between concurrent requests. One unbuffered
+request per row is the fastest cold strategy measured: 574-750 us, against 818-1,019 us for chunked
+buffered fills. Re-run the shootout after any test below changes the setup.
+
 An earlier, unexplained record of the same symptom is in `docs/design.md` sec 5 and `docs/prior-art.md`
 sec 7: "3.7x slower at depth 16 ... did not scale with queue depth". It was ~1.44 GB/s against an
 overlapped buffered baseline that may not have been cold. This investigation supersedes that record.

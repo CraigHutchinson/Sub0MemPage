@@ -18,6 +18,7 @@ endif()
 option(SUB0MEMPAGE_BUILD_TESTING "Build unit-tests" ${_sub0mempage_testing_default})
 option(SUB0MEMPAGE_BUILD_EXAMPLES "Build examples"   OFF)
 option(SUB0MEMPAGE_BUILD_BENCHMARKS "Build bookkeeping microbenchmarks (scripts/dev.py bench)" OFF)
+option(SUB0MEMPAGE_BUILD_DIAGNOSTICS "Build the read-strategy shootout (tools/read_shootout)" OFF)
 option(SUB0MEMPAGE_BUILD_INTEL_USM_PROBE "Build optional Intel SYCL capability inventory" OFF)
 
 if(SUB0MEMPAGE_BUILD_TESTING AND NOT IS_SUBPROJECT)
@@ -61,6 +62,10 @@ endif()
 
 if(SUB0MEMPAGE_BUILD_BENCHMARKS)
     add_subdirectory(bench)
+endif()
+
+if(SUB0MEMPAGE_BUILD_DIAGNOSTICS)
+    add_subdirectory(tools/read_shootout)
 endif()
 
 if(SUB0MEMPAGE_BUILD_INTEL_USM_PROBE)

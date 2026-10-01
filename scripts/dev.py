@@ -138,7 +138,8 @@ def configure_and_build(name: str, extra: list[str], benchmarks: bool = False,
     args, _ = CONFIGS[name]
     build = build_root() / (directory or name)
     cmake = ["cmake", "-S", str(ROOT), "-B", str(build), *args, *extra,
-             f"-DSUB0MEMPAGE_BUILD_BENCHMARKS={'ON' if benchmarks else 'OFF'}"]
+             f"-DSUB0MEMPAGE_BUILD_BENCHMARKS={'ON' if benchmarks else 'OFF'}",
+             "-DSUB0MEMPAGE_BUILD_DIAGNOSTICS=ON"]  # keeps tools/read_shootout building; its smoke test runs
     env = {}
     if not IS_WINDOWS:
         cxx = linux_cxx()
