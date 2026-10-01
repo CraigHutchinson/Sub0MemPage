@@ -106,7 +106,7 @@ public:
     ~TransferSet();
 
     /** @brief Start reading `source` into the destination at `destination_offset`. Never blocks on I/O.
-     *  The overlap check scans all max_claims records under the lock: bounded, O(max_claims).
+     *  The overlap check visits only records in use, under the lock: O(live claims), at most max_claims.
      *  @return busy if the destination range overlaps any record still in use (held or in flight);
      *          ticket_exhausted/queue_exhausted when bounded resources are full.
      */
@@ -135,10 +135,17 @@ private:
     void on_complete(TransferToken token, FillResult result) noexcept;
     [[nodiscard]] Status claim_status(std::uint32_t record, Deadline deadline, bool block) const noexcept;
     void release_claim(std::uint32_t record, std::uint32_t generation) noexcept;
+    /// Returns a record to the free list; the caller holds mutex_ and has made its state free.
+    void retire_record(std::uint32_t record) noexcept;
 
     TransferSetConfig config_;
     FillBackendRef backend_;
     std::vector<Record> records_;
+    // Both sized once at construction, so submit stays allocation-free and does not scan every record:
+    // the overlap check visits only records in use, and a free record comes off a stack.
+    std::vector<std::uint32_t> free_;    ///< free record indices; the next submit takes the back
+    std::vector<std::uint32_t> live_;    ///< indices of records not free, in no order
+    std::vector<std::uint32_t> live_at_; ///< position of each live record within live_
     TransferSetStats counters_;
     std::uint32_t held_ = 0;
 
@@ -186,7 +193,19 @@ inline std::expected<std::unique_ptr<TransferSet>, Status> TransferSet::create(c
 }
 
 inline TransferSet::TransferSet(Passkey, const TransferSetConfig& config, FillBackendRef backend)
-    : config_(config), backend_(backend), records_(config.max_claims) {}
+    : config_(config), backend_(backend), records_(config.max_claims), live_at_(config.max_claims) {
+    free_.reserve(config.max_claims);
+    live_.reserve(config.max_claims);
+    for (std::uint32_t i = config.max_claims; i-- > 0;) free_.push_back(i); // record 0 is taken first
+}
+
+inline void TransferSet::retire_record(std::uint32_t record) noexcept {
+    const std::uint32_t at = live_at_[record];
+    live_[at] = live_.back(); // swap-remove: live_ is unordered
+    live_at_[live_[at]] = at;
+    live_.pop_back();
+    free_.push_back(record);
+}
 
 inline TransferSet::~TransferSet() {
     const std::scoped_lock lock(mutex_);
@@ -204,19 +223,17 @@ inline std::expected<Claim, Status> TransferSet::submit(ByteRange source, std::u
         return std::unexpected(Status::out_of_range);
     }
     const std::scoped_lock lock(mutex_);
-    std::uint32_t free_record = UINT32_MAX;
-    for (std::uint32_t i = 0; i < records_.size(); ++i) {
-        const Record& record = records_[i];
-        if (record.state == RecordState::free) {
-            free_record = std::min(free_record, i);
-        } else if (destination_offset < record.destination_offset + record.length &&
-                   record.destination_offset < *destination_end) {
+    // Only records in use can overlap: O(live claims), not O(max_claims) (R13's bounded scan).
+    for (const std::uint32_t i : live_) {
+        const Record& live = records_[i];
+        if (destination_offset < live.destination_offset + live.length && live.destination_offset < *destination_end) {
             return std::unexpected(Status::busy);
         }
     }
-    if (free_record == UINT32_MAX) {
+    if (free_.empty()) {
         return std::unexpected(Status::ticket_exhausted);
     }
+    const std::uint32_t free_record = free_.back();
     Record& record = records_[free_record];
     const std::span<std::byte> destination =
         config_.destination.subspan(static_cast<std::size_t>(destination_offset), static_cast<std::size_t>(source.length));
@@ -232,6 +249,9 @@ inline std::expected<Claim, Status> TransferSet::submit(ByteRange source, std::u
     }
     record = {.destination_offset = destination_offset, .length = source.length, .generation = record.generation + 1,
               .state = RecordState::submitted, .result = Status::pending, .held = true};
+    free_.pop_back();
+    live_at_[free_record] = static_cast<std::uint32_t>(live_.size());
+    live_.push_back(free_record);
     ++held_;
     ++counters_.submitted;
     ++counters_.in_flight;
@@ -271,6 +291,7 @@ inline void TransferSet::on_complete(TransferToken token, FillResult result) noe
         if (!record.held) {
             record.state = RecordState::free;
             --counters_.records_in_use;
+            retire_record(token.index);
         }
         progress_.notify_all(); // under the lock: see SlotPool::on_complete
     }
@@ -302,6 +323,7 @@ inline void TransferSet::release_claim(std::uint32_t record_index, std::uint32_t
     if (record.state != RecordState::submitted) {
         record.state = RecordState::free;
         --counters_.records_in_use;
+        retire_record(record_index);
     }
 }
 
