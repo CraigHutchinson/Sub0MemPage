@@ -76,7 +76,13 @@ overlapped buffered baseline that may not have been cold. This investigation sup
 
 - Intel Core Ultra 9 275HX (8P+16E, no SMT), 63.4 GB RAM.
 - Windows 11 build 26220.
-- NTFS on a consumer NVMe SSD.
+- NTFS on a consumer NVMe SSD: D: is disk 1, a Predator SSD GM7 M.2 1 TB (PCIe 4, DRAM-less with host
+  memory buffer). C: is a separate Samsung MZAL81T0HFLB.
+- BitLocker is on for D: and C: (shell property `System.Volume.BitLockerProtection` = 1, readable
+  without elevation). Whether it is software or hardware encryption needs `manage-bde -status D:`, which
+  needs elevation.
+- Hypotheses 1-3 need an elevated shell (`fltmc`, a Defender exclusion, `manage-bde`) or an install
+  (`diskspd`). Checked 2026-10-01 from an unelevated session: all are refused.
 - Test file: the Sub0Llm Qwen4 S0Q1 sidecar `D:\ModelWeights\Sub0Llm-Qwen4-full48-bf16\qwen4_full48_q_bf16.bin.moeq`, 39,848,247,352 bytes.
 - `FILE_STORAGE_INFO` reports a logical sector of 512 bytes, physical sectors (atomicity and performance) of 4096, and an fs-effective size of 4096.
 - File attributes are `0x20`: not compressed, not sparse, not encrypted.
