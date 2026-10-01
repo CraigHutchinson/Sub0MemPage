@@ -26,6 +26,7 @@ with an independent buffered read after the timing. A strategy that returns wron
 | `pool-unbuffered` | the same, non-cached: DMA straight into the slot | all |
 | `mempage` | Sub0MemPage `LocalFileBackend` + `TransferSet`, chunked, as shipped | all |
 | `ioring` / `ioring-unbuffered` | Windows 11 IoRing, every chunk in one submission | Windows |
+| `iocp-unbuffered` | all aligned chunks issued before waiting; persistent OVERLAPPED storage and IOCP | Windows |
 | `map-copy` | memory-map the file, `memcpy` the row | all |
 | `map-prefetch-copy` | map, `PrefetchVirtualMemory` / `madvise(MADV_WILLNEED)`, then copy | all |
 | `map-ntcopy` | map, copy with non-temporal stores | x86-64 |
@@ -62,6 +63,7 @@ sub0mempage-read-shootout --list
 | `--verify-every N` | 4 | checksum every Nth miss |
 | `--only a,b` | all | run only these strategies |
 | `--no-pin` | pinned | leave the slots pageable |
+| `--direct-session` | off | cold, exclusively unbuffered arms: one setup canary, then no buffered reads between runs; independent whole-window direct-read checksum oracle |
 
 Output is one `JSON {...}` line per strategy and round, then a summary table: the median over rounds,
 fastest mean first, with throughput and speed relative to `naive-fread`.
@@ -72,6 +74,9 @@ Linux it uses `posix_fadvise(DONTNEED)`. macOS has no equivalent, so `--cold` is
 quiet host: other load moves every number.
 
 ## First results (2026-10-01, development host, 256 MiB file, 100 misses x 2 rounds)
+
+Historical mixed-session results below are superseded for uncached overlap by the controlled
+direct-session investigation at the end of this README. They remain the negative control.
 
 Intel Core Ultra 9 275HX, Windows 11 26220, the file on D: (Predator GM7 NVMe, BitLocker on). p50 per
 1,766,400-byte row:
@@ -134,3 +139,60 @@ The shootout's chunked uncached arms take 1.6-2.8 ms for 7 x 256 KiB in bursts, 
 0.92 ms, and are bimodal (sometimes overlapping, often serial). The ~3 GB/s "plateau" is therefore in
 how this repo's code issues I/O, not in the drive, NTFS or BitLocker. Open:
 `docs/investigations/unbuffered-read-ceiling.md`.
+
+## Correct uncached session and minimal repro (2026-10-01)
+
+The old cold setup opened a buffered canary immediately before every uncached run, then opened a
+buffered checksum oracle afterwards. Those operations create cached-file state. On this Windows host,
+even a **held buffered reader that has read only one 4 KiB page** makes seven otherwise identical
+uncached requests complete about one request-latency apart. The user-space issue loop is already
+asynchronous. IOCP, IoRing, more workers, write-through and affinity alone do not remove this condition.
+
+`--direct-session` separates this lifetime effect from the transfer mechanism. It primes the exact
+deterministic canary sample, evicts it and verifies it once, then allows two seconds for Windows'
+deferred cached-reader cleanup **outside measurement**. It runs only uncached arms and verifies
+every sampled row with an independent, whole aligned-window direct read. No buffered reader is opened
+again during the session. Uncached reads bypass the OS data cache even when rounds revisit a row;
+this does not flush the drive's own cache. The two-second setup allowance is an empirical diagnostic
+control, not an API guarantee or a proposed per-fill sleep in the library. Other processes can still
+open/map the file and invalidate the clean-session condition.
+
+```powershell
+$file = 'D:\ModelWeights\Sub0Llm-Qwen4-full48-bf16\qwen4_full48_q_bf16.bin.moeq'
+$tools = 'build/unbuffered-investigation/tools/read_shootout'
+& "$tools/sub0mempage-read-shootout.exe" --file $file --cold --direct-session `
+    --only inline-unbuffered,pool-unbuffered,ioring-unbuffered,iocp-unbuffered `
+    --row-bytes 1835008 --chunk-kib 256 --rounds 3 --verify-every 1
+```
+
+The separately built `sub0mempage-uncached-burst` is the small Windows reproducer: seven **full**
+adjacent 256 KiB requests into one allocation, issued before any wait, 100 distinct shuffled rows,
+2.8 ms busy gaps, all rows checked against an independent direct whole-row read. It prints issue-return
+and observed-completion timestamps for the first three bursts. Choose `event|iocp`, a cached-reader
+control (`none|held|closed`), and an untimed startup allowance in milliseconds. `held` reads one 4 KiB
+page through a buffered handle and retains it; `closed` immediately closes it. Compare rotated pairs:
+
+```powershell
+& "$tools/sub0mempage-uncached-burst.exe" $file iocp none 2000
+& "$tools/sub0mempage-uncached-burst.exe" $file iocp held 2000
+& "$tools/sub0mempage-uncached-burst.exe" $file iocp held 2000
+& "$tools/sub0mempage-uncached-burst.exe" $file iocp none 2000
+```
+
+Keep burst latency and the sustained throughput ceiling separate. One seven-request miss has only
+seven outstanding operations and drains them all. DiskSpd's depth-16 ceiling continuously replenishes
+sixteen requests. Use a 4 MiB row (16 chunks) or 8 MiB row (32 chunks) and `--gap none` for a deeper
+batch comparison; the shootout's GB/s is bytes divided by **timed fill durations**, excluding gaps,
+checksum work and setup, and must not be labelled sustained application throughput. Full measurements
+and the LocalFileBackend recommendation are in the investigation document.
+
+Qualification on the real D: sidecar, three rotated rounds, exact seven full 256 KiB requests:
+`iocp-unbuffered` p90 **0.577 / 0.546 / 0.620 ms**, all 300 rows verified. At depth 32 with no gaps,
+it reached **5.575 / 5.277 GB/s** including loop overhead in rounds 2/3; round 1 was **3.456 GB/s**
+and is retained as an unresolved slower run. IoRing under the same session fix reached
+**5.569 / 5.130 / 5.556 GB/s**. The minimal held-reader control was **2.30–2.60 ms p90** against
+**0.56–0.66 ms** without it. These runs passed the pre-run CPU gate; physical slot pinning was refused.
+See the investigation for all rounds, raw evidence, unit conversions, validation and limitations.
+
+JSON also reports `direct_session`, `fill_gbps` (timed fill durations only) and `loop_gbps`
+(the measured miss loop including gaps and in-loop checksum work, excluding setup/post-run oracle).

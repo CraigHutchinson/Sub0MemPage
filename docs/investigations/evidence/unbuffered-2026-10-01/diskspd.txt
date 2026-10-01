@@ -1,0 +1,9 @@
+run                                                MiB/s      IOPS    p50 ms    p90 ms
+uncached 2 MiB, depth 1                          2684.92   1342.46     0.722     0.879
+uncached 2 MiB, depth 16                         5255.98   2627.99     6.034     6.606
+uncached 256 KiB, depth 1                         741.74   2966.95     0.350     0.398
+uncached 256 KiB, depth 16                       4828.43  19313.71     0.750     1.271
+uncached 256 KiB, 8 threads x 1 (pool shape)     3292.07  13168.27     0.469     0.731
+uncached 256 KiB, 8 threads, adjacent blocks     4443.61  17774.44     0.390     0.571
+uncached 256 KiB, bursts of 7 + think time        107.64    430.56     0.559     0.925
+cached 2 MiB, depth 16                           6876.20   3438.10     1.785     4.741

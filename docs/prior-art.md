@@ -279,3 +279,14 @@ throughput alone. See `docs/design.md` §3 and `docs/sub0llm-consumer-trace.md` 
 The primary-source review and dated device tuple are in [intel-usm.md](intel-usm.md). USM aspects
 qualify allocation/access contracts; the copy-optimization extension prepares repeated explicit copies.
 Neither is proof of a physical residency lease or direct GPU access to an ordinary file mapping.
+
+## Noncached reads can still synchronize with cached-file state (2026-10-01)
+
+The [Microsoft FastFat read sample](https://github.com/microsoft/Windows-driver-samples/blob/main/filesys/fastfat/read.c)
+checks for a data section on a noncached read, takes exclusive resources and calls `CcFlushCache`
+"to avoid stale data problems". [CcFlushCache's contract](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccflushcache)
+permits blocking. H: this source-level mechanism exists in FastFat. M: the development host's NTFS
+seven-request probe flips between overlap and serialization solely by retaining a buffered reader
+after one 4 KiB read. L: the precise analogous NTFS internal lock is inferred, not kernel-traced.
+See [the controlled investigation](investigations/unbuffered-read-ceiling.md). This motivates
+`iocp-unbuffered` plus a direct-only diagnostic session, not a public backend/default change.

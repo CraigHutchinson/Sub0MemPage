@@ -1,0 +1,19 @@
+read-shootout: D:\ModelWeights\Sub0Llm-Qwen4-full48-bf16\qwen4_full48_q_bf16.bin.moeq (38002 MiB), row 1835008 B, 100 misses x 3 rounds, 8 readers, chunk 256 KiB, gap busy 2800 us, cache cold (direct-only session; one setup probe), DRAM load 0 threads, slots NOT pinned
+JSON {"round":1,"strategy":"inline-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":615.3,"p90_us":790.6,"p99_us":964.9,"mean_us":742.2,"verified":100,"direct_session":true,"fill_gbps":2.472,"loop_gbps":0.345}
+JSON {"round":1,"strategy":"pool-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":550.6,"p90_us":613.4,"p99_us":970.7,"mean_us":561.8,"verified":100,"direct_session":true,"fill_gbps":3.266,"loop_gbps":0.346}
+JSON {"round":1,"strategy":"iocp-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":498.6,"p90_us":577.0,"p99_us":1223.7,"mean_us":516.8,"verified":100,"direct_session":true,"fill_gbps":3.551,"loop_gbps":0.359}
+JSON {"round":1,"strategy":"ioring-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":494.5,"p90_us":567.1,"p99_us":736.7,"mean_us":506.2,"verified":100,"direct_session":true,"fill_gbps":3.625,"loop_gbps":0.361}
+JSON {"round":2,"strategy":"pool-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":603.0,"p90_us":659.2,"p99_us":718.0,"mean_us":604.3,"verified":100,"direct_session":true,"fill_gbps":3.037,"loop_gbps":0.346}
+JSON {"round":2,"strategy":"iocp-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":490.3,"p90_us":545.8,"p99_us":646.2,"mean_us":493.5,"verified":100,"direct_session":true,"fill_gbps":3.719,"loop_gbps":0.360}
+JSON {"round":2,"strategy":"ioring-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":496.0,"p90_us":553.9,"p99_us":748.8,"mean_us":508.9,"verified":100,"direct_session":true,"fill_gbps":3.606,"loop_gbps":0.360}
+JSON {"round":2,"strategy":"inline-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":571.1,"p90_us":631.8,"p99_us":1059.7,"mean_us":585.3,"verified":100,"direct_session":true,"fill_gbps":3.135,"loop_gbps":0.353}
+JSON {"round":3,"strategy":"iocp-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":554.4,"p90_us":620.0,"p99_us":773.5,"mean_us":560.1,"verified":100,"direct_session":true,"fill_gbps":3.276,"loop_gbps":0.359}
+JSON {"round":3,"strategy":"ioring-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":510.6,"p90_us":602.8,"p99_us":966.4,"mean_us":531.5,"verified":100,"direct_session":true,"fill_gbps":3.452,"loop_gbps":0.355}
+JSON {"round":3,"strategy":"inline-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":573.1,"p90_us":643.6,"p99_us":723.2,"mean_us":580.1,"verified":100,"direct_session":true,"fill_gbps":3.163,"loop_gbps":0.355}
+JSON {"round":3,"strategy":"pool-unbuffered","cold":true,"cache_probe_us":116.4,"p50_us":567.8,"p90_us":625.8,"p99_us":849.8,"mean_us":574.2,"verified":100,"direct_session":true,"fill_gbps":3.196,"loop_gbps":0.350}
+
+strategy             p50 us   p90 us   p99 us  mean us     GB/s vs naive
+ioring-unbuffered       496      567      749      509     3.61    0.00x
+iocp-unbuffered         499      577      774      517     3.55    0.00x
+pool-unbuffered         568      626      850      574     3.20    0.00x
+inline-unbuffered       573      644      965      585     3.14    0.00x

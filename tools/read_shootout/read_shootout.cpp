@@ -325,6 +325,7 @@ struct Options {
     std::string only; // comma-separated strategy names; empty = all
     bool list = false;
     bool pin = true;  // lock the slots in RAM, as the owned cache does
+    bool direct_session = false; // no buffered readers between uncached runs
 };
 
 struct Miss {
@@ -518,6 +519,68 @@ private:
     std::unique_ptr<ChunkPool> pool_;
     std::vector<ChunkPool::Task> tasks_;
 };
+
+#ifdef _WIN32
+/// Issue the whole aligned window before waiting. Persistent requests and an IOCP, no worker hand-off.
+/// See docs/investigations/unbuffered-read-ceiling.md for the cached-reader lifetime requirement.
+class IocpRead final : public Strategy {
+public:
+    std::string_view name() const override { return "iocp-unbuffered"; }
+    std::string_view what() const override { return "non-cached chunks issued together, persistent IOCP completions"; }
+    bool open(const Options& o) override {
+        row_ = o.row_bytes;
+        chunk_ = std::clamp(o.chunk_bytes / kAlign * kAlign, kAlign, std::size_t{1} << 30);
+        file_ = open_file(o.file, true);
+        if (file_.ok()) port_ = ::CreateIoCompletionPort(file_.handle, nullptr, 0, 1);
+        if (!port_) {
+            unavailable_ = "non-cached open or IOCP creation failed";
+            close_file(file_);
+            return false;
+        }
+        requests_.resize((round_up(row_ + kAlign - 1, kAlign) + chunk_ - 1) / chunk_);
+        return true;
+    }
+    const std::byte* read(const Miss& m) override {
+        const Window w = aligned_window(m.offset, row_);
+        std::size_t issued = 0;
+        bool ok = true;
+        for (std::size_t at = 0; at < w.length; at += chunk_) {
+            auto& request = requests_[issued];
+            request = {};
+            request.Offset = static_cast<DWORD>(w.offset + at);
+            request.OffsetHigh = static_cast<DWORD>((w.offset + at) >> 32);
+            const auto len = static_cast<DWORD>(std::min(chunk_, w.length - at));
+            if (!::ReadFile(file_.handle, m.slot + at, len, nullptr, &request) && ::GetLastError() != ERROR_IO_PENDING) {
+                ok = false;
+                break;
+            }
+            ++issued;
+        }
+        // Even on an issue error, drain every accepted request before returning ownership of the slot.
+        for (std::size_t i = 0; i < issued; ++i) {
+            DWORD bytes = 0;
+            ULONG_PTR key = 0;
+            OVERLAPPED* request = nullptr;
+            const bool completed = ::GetQueuedCompletionStatus(port_, &bytes, &key, &request, INFINITE) != 0;
+            if (!request) { ok = false; continue; }
+            const auto index = static_cast<std::size_t>(request - requests_.data());
+            const auto at = index * chunk_;
+            ok = ok && completed && index < issued && bytes == std::min(chunk_, w.length - at);
+        }
+        return ok ? m.slot + w.head : nullptr;
+    }
+    void close() override {
+        close_file(file_);
+        if (port_) ::CloseHandle(port_);
+        port_ = nullptr;
+    }
+private:
+    File file_;
+    HANDLE port_ = nullptr;
+    std::size_t chunk_ = 0;
+    std::vector<OVERLAPPED> requests_;
+};
+#endif
 
 /// The library as shipped: LocalFileBackend workers + a TransferSet over the slot pool, chunked.
 class MemPageRead final : public Strategy {
@@ -771,6 +834,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--only") o.only = next();
         else if (a == "--list") o.list = true;
         else if (a == "--no-pin") o.pin = false;
+        else if (a == "--direct-session") o.direct_session = true;
         else fail("unknown argument " + std::string(a) + " (see tools/read_shootout/README.md)");
     }
     if (o.row_bytes == 0 || o.readers == 0 || o.misses <= 0 || o.rounds <= 0) fail("row, readers, misses, rounds must be > 0");
@@ -834,6 +898,9 @@ int main(int argc, char** argv) {
     all.push_back(std::make_unique<InlineRead>(true));
     all.push_back(std::make_unique<PoolRead>(false));
     all.push_back(std::make_unique<PoolRead>(true));
+#ifdef _WIN32
+    all.push_back(std::make_unique<IocpRead>());
+#endif
     all.push_back(std::make_unique<MemPageRead>(std::span(slots, stride * kSlots)));
 #ifdef SHOOTOUT_HAS_IORING
     all.push_back(std::make_unique<IoRingRead>(false));
@@ -852,17 +919,38 @@ int main(int argc, char** argv) {
         if (o.only.empty() || ("," + o.only + ",").find("," + std::string(s->name()) + ",") != std::string::npos)
             chosen.push_back(s.get());
     if (chosen.empty()) fail("--only matched no strategy (try --list)");
+    if (o.direct_session) {
+        if (!o.cold) fail("--direct-session requires --cold");
+        for (const auto* s : chosen)
+            if (s->name().find("unbuffered") == std::string_view::npos)
+                fail("--direct-session requires --only containing exclusively unbuffered arms");
+    }
 
     std::printf("read-shootout: %s (%.0f MiB), row %zu B, %d misses x %d rounds, %u readers, chunk %zu KiB, "
                 "gap %s %d us, cache %s, DRAM load %u threads, slots %s\n",
                 o.file.string().c_str(), static_cast<double>(file_bytes) / (1 << 20), o.row_bytes, misses, o.rounds,
                 o.readers, o.chunk_bytes / 1024,
                 o.gap == Options::Gap::none ? "none" : o.gap == Options::Gap::busy ? "busy" : "sleep", o.gap_us,
-                o.cold ? "cold (evicted per run)" : "warm", o.load_threads, pinned ? "pinned" : "NOT pinned");
+                o.direct_session ? "cold (direct-only session; one setup probe)" : o.cold ? "cold (evicted per run)" : "warm",
+                o.load_threads, pinned ? "pinned" : "NOT pinned");
 
     std::vector<std::vector<Result>> results(chosen.size());
     std::vector<std::string> skipped(chosen.size());
     std::vector<std::byte> reference(o.row_bytes);
+    std::byte* direct_reference = o.direct_session ? alloc_pages(stride) : nullptr;
+    if (o.direct_session && !direct_reference) fail("direct reference allocation failed");
+    double direct_cache_us = 0;
+    if (o.direct_session) {
+        (void)probe_cache_us(o.file); // prime these exact canary pages before attempting eviction
+        if (!evict(o.file)) fail("cannot evict the file on this platform");
+        direct_cache_us = probe_cache_us(o.file);
+        if (direct_cache_us < 25) fail("eviction did not take before direct session");
+#ifdef _WIN32
+        // Diagnostic setup only: allow the buffered canary's deferred cache-map cleanup to finish.
+        // A delay is not a production synchronization contract; the session must stay direct-only.
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+#endif
+    }
     auto load = o.load_threads ? std::make_unique<DramLoad>(o.load_threads) : nullptr;
     for (int round = 0; round < o.rounds; ++round) {
         std::vector<int> order(rows);
@@ -873,7 +961,10 @@ int main(int argc, char** argv) {
             Strategy& s = *chosen[si];
             if (!skipped[si].empty()) continue;
             double cache_us = 0;
-            if (o.cold) {
+            if (o.direct_session) {
+                cache_us = direct_cache_us;
+            } else if (o.cold) {
+                (void)probe_cache_us(o.file); // prime the same deterministic sample: random cold pages cannot prove eviction
                 if (!evict(o.file)) fail("cannot evict the file on this platform; run warm");
                 cache_us = probe_cache_us(o.file);
                 if (cache_us < 25) fail("eviction did not take (4 KiB probe median " + std::to_string(cache_us) +
@@ -891,6 +982,8 @@ int main(int argc, char** argv) {
             std::vector<double> t;
             std::vector<std::pair<int, std::uint64_t>> sampled;
             t.reserve(misses);
+            sampled.reserve(static_cast<std::size_t>(misses / o.verify_every + 1));
+            const auto loop_start = Clock::now();
             for (int i = 0; i < misses; ++i) {
                 const Miss m{static_cast<std::uint64_t>(order[i]) * o.row_bytes, slots + stride * static_cast<std::size_t>(i % kSlots)};
                 gap(o);
@@ -900,11 +993,17 @@ int main(int argc, char** argv) {
                 if (!got) fail(std::string(s.name()) + ": read failed at miss " + std::to_string(i));
                 if (i % o.verify_every == 0) sampled.emplace_back(order[i], fnv1a(got, o.row_bytes));
             }
+            const double loop_us = us_since(loop_start);
             s.close();
-            File ref = open_file(o.file, false); // independent buffered read, outside the timing
+            File ref = open_file(o.file, o.direct_session); // independent read, outside the timing
             for (const auto& [row, sum] : sampled) {
-                if (read_at(ref, reference.data(), o.row_bytes, static_cast<std::uint64_t>(row) * o.row_bytes) != o.row_bytes ||
-                    fnv1a(reference.data(), o.row_bytes) != sum)
+                const auto offset = static_cast<std::uint64_t>(row) * o.row_bytes;
+                const Window window = aligned_window(offset, o.row_bytes);
+                const auto* checked = o.direct_session ? direct_reference + window.head : reference.data();
+                const bool read_ok = o.direct_session
+                    ? read_at(ref, direct_reference, window.length, window.offset) == window.length
+                    : read_at(ref, reference.data(), o.row_bytes, offset) == o.row_bytes;
+                if (!read_ok || fnv1a(checked, o.row_bytes) != sum)
                     fail(std::string(s.name()) + ": WRONG BYTES for row " + std::to_string(row));
             }
             close_file(ref);
@@ -912,9 +1011,12 @@ int main(int argc, char** argv) {
             const Result r{pct(t, 0.5), pct(t, 0.9), pct(t, 0.99), std::accumulate(t.begin(), t.end(), 0.0) / t.size()};
             results[si].push_back(r);
             std::printf("JSON {\"round\":%d,\"strategy\":\"%s\",\"cold\":%s,\"cache_probe_us\":%.1f,\"p50_us\":%.1f,"
-                        "\"p90_us\":%.1f,\"p99_us\":%.1f,\"mean_us\":%.1f,\"verified\":%zu}\n",
+                        "\"p90_us\":%.1f,\"p99_us\":%.1f,\"mean_us\":%.1f,\"verified\":%zu,"
+                        "\"direct_session\":%s,\"fill_gbps\":%.3f,\"loop_gbps\":%.3f}\n",
                         round + 1, std::string(s.name()).c_str(), o.cold ? "true" : "false", cache_us, r.p50, r.p90, r.p99,
-                        r.mean, sampled.size());
+                        r.mean, sampled.size(), o.direct_session ? "true" : "false",
+                        static_cast<double>(o.row_bytes) / r.mean / 1e3,
+                        static_cast<double>(o.row_bytes) * misses / loop_us / 1e3);
         }
     }
     const double load_gbps = load ? load->stop() : 0;
@@ -947,5 +1049,6 @@ int main(int argc, char** argv) {
         if (!skipped[si].empty()) std::printf("%-18s unavailable: %s\n", std::string(chosen[si]->name()).c_str(), skipped[si].c_str());
     if (load_gbps > 0) std::printf("DRAM load sustained %.1f GB/s\n", load_gbps);
     free_pages(slots, stride * kSlots);
+    if (direct_reference) free_pages(direct_reference, stride);
     return 0;
 }

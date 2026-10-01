@@ -1,6 +1,8 @@
 # Investigation: unbuffered reads plateau at ~3 GB/s on the development host
 
-Status: **OPEN**, opened 2026-10-01. Self-contained. Nothing from the session that found it is needed
+Status: **cached-reader trigger reproduced; direct-session overlap fixed in diagnostics**, 2026-10-01.
+LocalFileBackend integration remains deliberately unchanged pending consumer lifetime qualification.
+Self-contained. Nothing from the session that found it is needed
 to pick it up.
 
 ## The problem
@@ -169,6 +171,10 @@ So this is not per-file-object serialization.
 
 ## Hypotheses, cheapest test first
 
+**Historical hypotheses:** 1-3 below were ruled out as general ceilings by the unelevated DiskSpd
+reference. The controlled cached-reader finding below supersedes the old interpretation that the
+uncached issue primitives themselves cannot overlap.
+
 Sources come from the research report summarized in the session that opened this. Confidence tags:
 H = documented by Microsoft, M = public measurements, L = speculation.
 
@@ -201,3 +207,156 @@ The plateau is explained by a captured trace, not inference, and either:
   (the fix is recorded here and in `docs/prior-art.md`), or
 - it is shown to be a property of this host or drive, recorded as such, with buffered fills documented
   as the recommended default and the duplicate-caching cost measured in a real regime-2 workload.
+
+## Controlled issue-path finding (2026-10-01)
+
+The trigger is **cached-file state created by buffered reads**, not an inherent uncached device
+ceiling and not a failure to put all requests in flight. The shootout recreated that state itself:
+`probe_cache_us()` opened/read a buffered handle immediately before each uncached arm; the independent
+buffered checksum oracle did the same between arms. Closing a cached handle does not make this effect
+disappear immediately on this host. A noncached open/close and a cold data-page probe are not proof
+that the cached-reader lifetime has ended.
+
+The smallest controlled repro is `tools/read_shootout/uncached_burst.cpp`, built as
+`sub0mempage-uncached-burst`. It issues seven adjacent 256 KiB `ReadFile` requests on one
+`FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING` handle into adjacent ranges of one allocation, before
+waiting for any. Request storage is preallocated; all 100 distinct rows are checksum-checked against
+an independent whole-row direct read after timing. The only change between the main controls is a
+buffered handle that reads **one 4 KiB page** and stays open. The page is at file offset zero; the
+bursts are scattered across the real 37 GiB sidecar, so the effect is not just rereading cached bytes.
+Both controls have the same untimed startup allowance and the same 2.8 ms busy gaps.
+
+Observed timestamps show the distinction clearly: calls return in roughly 0.1 ms for all seven
+requests in both modes. With the held cached reader, completions are staggered by roughly 0.3 ms.
+Without it, completions bunch within one burst latency. Event waits observe completion in request
+order and may hide earlier out-of-order finishes; IOCP observes dequeue order, and neither is a
+hardware timestamp. The reproducer retains both completion methods to avoid attributing the finding
+to IOCP alone. Keeping the cached reader alive remains slow even after a two-second startup allowance;
+closing it and allowing cleanup restores overlap.
+
+### Source comparison and limits of the attribution
+
+[DiskSpd's issue loop](https://github.com/microsoft/diskspd/blob/master/IORequestGenerator/IORequestGenerator.cpp)
+uses ordinary overlapped `ReadFile`, preallocated request/buffer state, and an IOCP for its asynchronous
+path. It queues before waiting; it also applies affinity by default. None of those mechanisms prevents
+the controlled cached-reader trigger. Exploratory variants of `FILE_FLAG_WRITE_THROUGH`, IOCP vs
+events, `FILE_SKIP_SET_EVENT_ON_HANDLE`, and CPU affinity failed to remove serialization consistently.
+DiskSpd does not put a buffered cache-canary/checksum reader between each uncached burst.
+
+Microsoft's [FastFat read sample](https://github.com/microsoft/Windows-driver-samples/blob/main/filesys/fastfat/read.c)
+explicitly handles a noncached read when a data section exists: it acquires exclusive file/paging
+resources and flushes the accessed range before proceeding. Its comment says "to avoid stale data
+problems". [CcFlushCache](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ccflushcache)
+has no nonblocking wait parameter. This is primary-source evidence that bypassing the data cache can
+still encounter cache-coherency synchronization. **FastFat is not NTFS**: the exact NTFS internal lock
+and IRP timeline have not been captured here. The cached-reader lifetime is demonstrated causally;
+attributing the internal serialization specifically to the analogous NTFS coherency path is an
+inference, not an observed kernel stack. No elevation, filter exclusion or raw-volume access was used.
+
+### Diagnostic implementation
+
+`iocp-unbuffered` issues the aligned window's chunks before waiting, retains OVERLAPPED storage sized
+at open, and uses a persistent IOCP. Successful synchronous completions are still dequeued; accepted
+requests are drained on a later issue failure before returning the slot. It reads directly into the
+caller slot. It adds no intermediate data copy or per-miss allocation.
+
+`--direct-session` keeps the diagnostic direct-only after a **single** primed/evicted/verified canary
+and a two-second Windows cleanup allowance outside timing. Every verification uses an independent
+whole aligned-window direct read. The allowance is a diagnostic control, **not** production
+synchronization. Per-round `cache_probe_us` in this mode is the same setup canary, not a new buffered
+probe. The default mixed-session mode remains available as the regression/negative control. The cold
+canary now primes the exact deterministic sample before eviction, rather than mistaking unrelated
+cold pages of a large file for proof that eviction worked.
+
+### Recorded results and verification
+
+Hardware/artifact: Core Ultra 9 275HX, Windows 11 26220, Predator GM7 on D:, BitLocker enabled,
+`D:\ModelWeights\Sub0Llm-Qwen4-full48-bf16\qwen4_full48_q_bf16.bin.moeq` (38,002 MiB).
+Clang 22.1.8, Release, Ninja. Slots were **not physically pinned** in these runs: VirtualLock was refused
+in this process. Pinning is not claimed as the fix. Full raw outputs are kept in
+[`evidence/unbuffered-2026-10-01/`](evidence/unbuffered-2026-10-01/).
+
+The baseline reproduced the old failure on the real sidecar: pool p90 **2.758 / 2.893 / 2.954 ms**,
+IoRing p90 **3.546 / 3.768 / 3.828 ms** across three rotated rounds; all sampled checksums passed.
+The DiskSpd script was rerun unelevated (3 s measured / 2 s warmup per arm): depth-16, 256 KiB
+**4,828 MiB/s**; depth-16, 2 MiB **5,256 MiB/s**; seven-request think-time p90 **0.925 ms**.
+DiskSpd reports per-I/O percentiles; our burst percentile includes completion of the entire row.
+GB/s below uses decimal units; DiskSpd's MiB/s must be converted before comparing.
+
+**Exact seven full adjacent 256 KiB requests, 100 misses x 3 rotated rounds, 2.8 ms busy gaps,
+every row verified**, direct session. The pre-run 10 s CPU-load gate measured **4.839%**, no named
+competing storage/build tools. The primed eviction canary measured **116.4 us** after eviction.
+
+| Arm | p90 ms, rounds 1 / 2 / 3 | Timed fill GB/s, rounds 1 / 2 / 3 |
+|---|---|---|
+| inline, one request | 0.791 / 0.632 / 0.644 | 2.472 / 3.135 / 3.163 |
+| pool | 0.613 / 0.659 / 0.626 | 3.266 / 3.037 / 3.196 |
+| **new IOCP** | **0.577 / 0.546 / 0.620** | **3.551 / 3.719 / 3.276** |
+| IoRing | 0.567 / 0.554 / 0.603 | 3.625 / 3.606 / 3.452 |
+
+The old arms recover without changing their issue loops. The session lifetime change, not IOCP alone,
+is what removes serialization. For the original 1,766,400-byte (short final chunk, unaligned row
+offset) shape, a preceding exploratory direct-session run also checked every row: IOCP p90
+0.647 / 0.541 / 0.596 ms. The exact seven-full-chunk run above is the qualification evidence.
+
+**Ceiling comparison:** no gaps, 1,000 misses x 3 rotated rounds. At 4 MiB (16 chunks), IOCP timed-fill
+rates were **4.829 / 4.386 / 4.811 GB/s**; full-loop rates **4.575 / 4.189 / 4.584 GB/s**, with ten
+whole rows checked per round. At 8 MiB (32 chunks), the pre-run 10 s load gate was **4.196%**, no
+named competing tools; primed canary **125.3 us**. One complete 8 MiB row was checksum-checked per
+1,000-row arm, after the fully checked seven-request qualification above.
+
+| Depth-32 arm | Timed fill GB/s, rounds 1 / 2 / 3 | Full-loop GB/s, rounds 1 / 2 / 3 |
+|---|---|---|
+| **new IOCP** | **3.466 / 5.608 / 5.308** | **3.456 / 5.575 / 5.277** |
+| IoRing | 5.601 / 5.156 / 5.589 | 5.569 / 5.130 / 5.556 |
+
+Full-loop rates include issue/wait, clock reads, slot rotation and in-loop checksum work; they exclude
+setup and the independent post-run oracle. The first deep IOCP arm was substantially slower (p90
+6.194 ms) and its exact cause is **not resolved**; it is retained in the raw evidence and table.
+The mechanism reaches the approximately 5.3 GB/s uncached bar in subsequent IOCP arms and all three
+IoRing arms, but these results do not establish uniformly stable ceiling throughput in every run.
+The OS eviction does not flush firmware caches, and setup allowances are not a guarantee of NTFS
+cache-map teardown.
+
+**Minimal causal control**, same gated measurement window, rotated `none / held / held / none /
+none / held`, two-second startup in both modes, IOCP, all 600 rows independently checked:
+
+| Buffered reader | p90 ms in observed order |
+|---|---|
+| none | 0.659 / 0.562 / 0.640 |
+| held after a single 4 KiB read | 2.334 / 2.605 / 2.303 |
+
+For example, a later held-reader burst returned from issuing all requests by **70.1 us**, with
+completion observations **377.8, 619.2, 957.9, 1294.6, 1594.2, 1891.6, 2182.2 us**. A clean burst
+issued by **129.4 us**, with completions between **432.8 and 504.1 us**. Startup bursts occasionally
+take about 10 ms after the idle allowance; they are included in percentile calculations, not removed.
+
+`python scripts/dev.py check` passed Windows/MSVC, Linux/GCC, ASan+UBSan and TSan (three repeats),
+and killed all 13 mutants. Suite check counts stayed 28 / 82 / 39 / 78. The diagnostics' checksum
+smoke passed on both platforms. ARM was explicitly skipped because its toolchain/qemu are absent.
+`cpp-review` was applied to the working diff against `e343df4`; no outstanding MUST findings.
+No library header, source or public API changed.
+
+The required `dev.py bench --baseline main` also ran at 4.571% load with no named competitors.
+G-ALLOC passed at zero. Two provisional G-PERF ratios failed (1.126 and 1.068), with current-arm
+spreads 36.6% and 28.9%, even though current and baseline use identical library headers. This is
+recorded as a failed bookkeeping gate, not silently reported green or used as I/O evidence; its
+generated report and history are retained in the evidence directory's `bookkeeping/` subdirectory. Diagnostic builds remain
+off by default. The storage conclusions above come from the independently gated real-file runs.
+
+### Recommendation for LocalFileBackend
+
+Keep LocalFileBackend unchanged in this change. For a qualified uncached backend, maintain a
+direct-only data lifetime for each stream: read sidecar metadata/tokenizer/validation bytes via an
+aligned direct window too, avoid concurrently retained buffered readers or data mappings, and do
+not put a buffered canary/oracle in the fill path. Closing a buffered handle needs qualification;
+hardcoding a two-second sleep into `prefetch` or each fill is unacceptable.
+
+Use persistent asynchronous request state and IOCP on Windows (or the separately qualified Linux
+primitive), issue all currently available chunks before waiting, and preserve completion/slot-lease
+ownership on every error. A single aligned request remains a useful fallback when a consumer must
+mix cached and uncached access. For the hardware bandwidth ceiling, keep enough **independent misses**
+in flight to replenish approximately depth 16 or higher; a lone seven-chunk miss drains its queue and
+has a different roof. Qualify the real engine's retained sidecar mapping and metadata-reader lifetime
+before promoting an uncached default. Success here is transfer-path evidence, not decode-throughput
+or mixed-access evidence, and Linux/WSL timings are not measurements of this physical NVMe.

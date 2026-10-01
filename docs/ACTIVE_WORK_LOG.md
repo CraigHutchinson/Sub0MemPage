@@ -15,3 +15,9 @@ M0/M1 committed. M2 draft committed 2026-09-25; next steps are listed in impleme
 Completed documentation coordination across MemPage, TieredCache and Llm. Scope: plans, requirements,
 consumer audit and NVIDIA source research. No engine files, builds or hardware workloads held.
 GPU transport and model integration remain unimplemented and require the recorded gates.
+## 2026-10-01 uncached issue-path investigation
+
+Codex: done; files, CPU and D: NVMe released. Added a minimal cached-reader control, IOCP shootout
+arm and direct-only diagnostic session. Exact seven-chunk p90 0.546-0.620 ms; depth-32 IOCP later
+rounds 5.28-5.58 GB/s including loop overhead (first slower run retained). Windows/Linux, sanitizers
+and 13 mutants pass; bookkeeping perf gate's noisy failures recorded. LocalFileBackend unchanged.
