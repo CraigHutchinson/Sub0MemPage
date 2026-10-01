@@ -28,6 +28,46 @@ and its n-gram embedding table, which is 102 GB of 320-byte rows (Sub0Llm
 `docs/STORAGE_STACK_PLAN.md`, "Core use case"). Until this is resolved, fills default to buffered, and
 unbuffered stays an explicit, measured mode.
 
+### Update 2026-10-01: the copy is the miss cost under decode load
+
+Sub0Llm's owned expert cache now beats reactive mmap at matched memory (+3%), so the miss is the
+remaining cost: about 51k blocking misses per 2,000 tokens, averaging ~500 us each, about 8% of decode.
+`tools/miss_probe/` breaks that time down (warm page cache, one 1,766,400-byte expert per miss, 10
+readers, 256 KiB chunks, a 2.8 ms busy gap between misses as in decode):
+
+| Measurement | p50 per expert |
+|---|---:|
+| MemPage pool (TransferSet + LocalFileBackend), quiet host | 273 us |
+| Same, a 28 KB read (fixed hand-off cost only) | 42 us |
+| Ideal pool: spinning threads, per-thread handles (`raw_copy_probe`) | 163-185 us (~10 GB/s ceiling) |
+| One synchronous read on the calling thread | 264 us (~7 GB/s) |
+| MemPage pool, DRAM saturated by `bw_hog` (8-14 threads, ~90 GB/s) | 367-425 us |
+| One synchronous read, DRAM saturated | 510-718 us |
+| Engine, sidecar warm, default vs `KMP_BLOCKTIME=0` (mean) | 520 vs 486 us |
+
+Ruled out:
+- **Hand-offs:** about 40 us per miss.
+- **The shared file handle:** per-thread handles are no faster.
+- **Waiter wake-up:** spinning 500 us before parking changed nothing.
+- **OpenMP spin-waiting:** about 7%.
+
+The buffered copy itself is the cost:
+- It peaks at ~10 GB/s however it is parallelised.
+- Under decode's DRAM load it slows to the engine's ~500 us.
+
+The only large lever left is not copying: DMA straight into the pinned pool with unbuffered reads.
+That makes this investigation the critical path for a cheaper miss, not only for avoiding double
+caching.
+
+```
+clang++ -std=c++23 -O3 -I include tools/miss_probe/miss_probe.cpp -o miss_probe.exe
+clang++ -std=c++23 -O3 tools/miss_probe/raw_copy_probe.cpp -o raw_copy_probe.exe
+clang++ -std=c++23 -O2 -mavx2 tools/miss_probe/bw_hog.cpp -o bw_hog.exe
+miss_probe <file> 10 1500 1766400 262144 1          # pool vs inline, gap none/busy/sleep
+raw_copy_probe <file> 10 1500 262144                # ideal pool, shared vs per-thread handles
+bw_hog 14 60 & miss_probe <file> 10 1000 1766400 262144 1   # under DRAM load
+```
+
 An earlier, unexplained record of the same symptom is in `docs/design.md` sec 5 and `docs/prior-art.md`
 sec 7: "3.7x slower at depth 16 ... did not scale with queue depth". It was ~1.44 GB/s against an
 overlapped buffered baseline that may not have been cold. This investigation supersedes that record.
