@@ -61,6 +61,7 @@ sub0mempage-read-shootout --list
 | `--load-threads N` | 0 | threads streaming over 128 MiB buffers during the run |
 | `--verify-every N` | 4 | checksum every Nth miss |
 | `--only a,b` | all | run only these strategies |
+| `--no-pin` | pinned | leave the slots pageable |
 
 Output is one `JSON {...}` line per strategy and round, then a summary table: the median over rounds,
 fastest mean first, with throughput and speed relative to `naive-fread`.
@@ -112,3 +113,24 @@ Linux (WSL2, GCC 15, ext4 on a virtual disk, 64 MiB file, 30 misses, warm): mapp
 `map-touch` takes 49 us p50 and `map-copy` 159 us, against `inline-pread` 211 us and `mempage` 225 us. So
 the Windows soft-fault cost is not universal. WSL's unbuffered numbers measure the virtual disk, not the
 hardware.
+
+## DiskSpd reference
+
+`diskspd_reference.ps1` runs [DiskSpd](https://github.com/microsoft/diskspd) on the same file in matching
+shapes. It shows what the drive and I/O stack can deliver, so an arm far below it is losing time in its
+own code. D: sidecar, 2026-10-01:
+
+| DiskSpd run | MiB/s | p50 ms per I/O |
+|---|---:|---:|
+| uncached 2 MiB, depth 1 / 16 | 2,545 / 5,268 | 0.77 / 6.04 |
+| uncached 256 KiB, depth 1 / 16 | 743 / 4,552 | 0.35 / 0.82 |
+| uncached 256 KiB, 8 threads x 1 | 3,125 | 0.56 |
+| uncached 256 KiB, 8 threads, adjacent blocks | 4,151 | 0.41 |
+| uncached 256 KiB, bursts of 7 + think time | (idle-bound) | 0.52 (p90 0.92) |
+| cached 2 MiB, depth 16 | 6,452 | 0.54 |
+
+Uncached I/O overlaps fine under DiskSpd: about 5 GB/s at depth, with adjacent blocks and with bursts.
+The shootout's chunked uncached arms take 1.6-2.8 ms for 7 x 256 KiB in bursts, where DiskSpd's p90 is
+0.92 ms, and are bimodal (sometimes overlapping, often serial). The ~3 GB/s "plateau" is therefore in
+how this repo's code issues I/O, not in the drive, NTFS or BitLocker. Open:
+`docs/investigations/unbuffered-read-ceiling.md`.

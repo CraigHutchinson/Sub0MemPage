@@ -324,6 +324,7 @@ struct Options {
     int verify_every = 4;
     std::string only; // comma-separated strategy names; empty = all
     bool list = false;
+    bool pin = true;  // lock the slots in RAM, as the owned cache does
 };
 
 struct Miss {
@@ -769,6 +770,7 @@ Options parse(int argc, char** argv) {
         else if (a == "--verify-every") o.verify_every = std::max(1, std::stoi(next()));
         else if (a == "--only") o.only = next();
         else if (a == "--list") o.list = true;
+        else if (a == "--no-pin") o.pin = false;
         else fail("unknown argument " + std::string(a) + " (see tools/read_shootout/README.md)");
     }
     if (o.row_bytes == 0 || o.readers == 0 || o.misses <= 0 || o.rounds <= 0) fail("row, readers, misses, rounds must be > 0");
@@ -824,7 +826,7 @@ int main(int argc, char** argv) {
     const std::size_t stride = round_up(o.row_bytes + 2 * kAlign, kAlign);
     std::byte* slots = alloc_pages(stride * kSlots);
     if (!slots) fail("slot allocation failed");
-    const bool pinned = pin(slots, stride * kSlots);
+    const bool pinned = o.pin && pin(slots, stride * kSlots);
 
     std::vector<std::unique_ptr<Strategy>> all;
     all.push_back(std::make_unique<NaiveFread>());

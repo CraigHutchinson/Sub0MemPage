@@ -79,6 +79,16 @@ So the plateau is a per-request cost, with no overlap between concurrent request
 request per row is the fastest cold strategy measured: 574-750 us, against 818-1,019 us for chunked
 buffered fills. Re-run the shootout after any test below changes the setup.
 
+### Update 2026-10-01: DiskSpd rules out the drive and the stack
+
+DiskSpd 2.3.0 reads the same file uncached at ~5 GB/s at depth (4.55 GB/s with 256 KiB blocks, 5.27 GB/s
+with 2 MiB). It holds that with 8 threads x 1 (3.1 GB/s), with adjacent blocks (4.2 GB/s), and with
+bursts of 7 plus think time (p90 0.92 ms per I/O). Hypotheses 1-3 (filter driver, device ceiling,
+BitLocker) therefore cannot be the cause: they would bound DiskSpd too. The cause is in how this repo's
+probes issue uncached I/O. They serialize, bimodally, where DiskSpd does not; pinned versus pageable
+slots makes no difference. Reproduce with `tools/read_shootout/diskspd_reference.ps1` and the shootout.
+DiskSpd's I/O path (https://github.com/microsoft/diskspd) is the reference to diff against.
+
 An earlier, unexplained record of the same symptom is in `docs/design.md` sec 5 and `docs/prior-art.md`
 sec 7: "3.7x slower at depth 16 ... did not scale with queue depth". It was ~1.44 GB/s against an
 overlapped buffered baseline that may not have been cold. This investigation supersedes that record.
