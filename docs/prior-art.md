@@ -264,7 +264,9 @@ directly measured, not estimated, on the real 37.11 GiB Sub0Llm MoE-expert sidec
   production 4–5x scaling shortfall.
 - **`FILE_FLAG_NO_BUFFERING` measured WORSE, not better**, at matched depth on this hardware — 3.7x
   slower than buffered overlapped I/O at depth 16, and did not scale with queue depth at all. Reported as
-  a genuine, unexplained measurement rather than reconciled away.
+  a genuine, unexplained measurement rather than reconciled away. Superseded 2026-10-01 by
+  `investigations/unbuffered-read-ceiling.md` (verified-cold baseline: ~3 vs ~5.5 GB/s, a near-fixed
+  request rate across block sizes; still open).
 - **Prefetch depth, not faster individual faults, is the single largest lever by an order of magnitude**:
   93% of this device's measured ceiling throughput is reached by just 8 outstanding reads.
 

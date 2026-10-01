@@ -216,7 +216,9 @@ empirical study (§3 below) actually measured which one was real on this machine
    reaches a deeper queue even at depth 1.
 4. **Buffered, not `FILE_FLAG_NO_BUFFERING`.** Measured 3.7x *slower* at depth 16 on this hardware and did
    not scale with queue depth at all — reported as a genuine, unreconciled measurement (`prior-art.md`
-   §7), not smoothed into a tidier story.
+   §7), not smoothed into a tidier story. **Re-measured 2026-10-01 against a verified-cold buffered
+   baseline:** unbuffered plateaus at ~3 GB/s against 5.5 GB/s, with a roughly fixed request rate
+   whatever the block size. Open investigation: `investigations/unbuffered-read-ceiling.md`.
 5. **Target queue depth ~8.** 93% of ceiling throughput was reached by 8 outstanding reads on this
    hardware; a design does not need dozens in flight.
 6. **Do not size the design against the full cold-resolve cost alone.** Even a perfect I/O layer leaves
