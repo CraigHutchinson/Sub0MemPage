@@ -25,6 +25,7 @@ with an independent buffered read after the timing. A strategy that returns wron
 | `pool-pread` | the row split into `--chunk-kib` chunks over `--readers` parked threads | all |
 | `pool-unbuffered` | the same, non-cached: DMA straight into the slot | all |
 | `mempage` | Sub0MemPage `LocalFileBackend` + `TransferSet`, chunked, as shipped | all |
+| `mempage-unbuffered` | the same with `FileAccess::uncached`: the library's own non-cached path | all |
 | `ioring` / `ioring-unbuffered` | Windows 11 IoRing, every chunk in one submission | Windows |
 | `iocp-unbuffered` | all aligned chunks issued before waiting; persistent OVERLAPPED storage and IOCP | Windows |
 | `map-copy` | memory-map the file, `memcpy` the row | all |

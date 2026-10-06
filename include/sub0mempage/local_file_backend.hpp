@@ -21,9 +21,10 @@
  *  IOCP/`CreateThreadpoolIo` (Windows, docs/prior-art.md sec 1) are deferred, named optimizations behind
  *  this same FillBackendRef seam, not silently dropped.
  *
- *  Alignment: this backend does ordinary buffered reads (no `O_DIRECT`/unbuffered I/O), so the open
- *  slot-storage-alignment question (implementation-plan.md "Checkpoint: M2 draft") does not apply to it;
- *  it would need revisiting only if a future unbuffered/GDS-style backend is added.
+ *  Access mode: a file is registered buffered (the default: reads go through the OS page cache) or
+ *  FileAccess::uncached (they bypass it and the device writes straight into the destination). Uncached
+ *  requests must be aligned -- see FileAccess. A caller-owned cache that is meant to be the only copy
+ *  wants uncached fills: a buffered fill leaves a second copy in the OS cache and pays a kernel copy.
  *
  *  Administrative (may block and allocate; never on the hot path, transfer-contract.md "Endpoint and
  *  region registration"): create(), register_file(), shutdown() and the destructor. Only submit() runs
@@ -69,8 +70,6 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-
-#include <limits>
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -88,6 +87,26 @@ inline const NativeFileHandle kInvalidFileHandle = INVALID_HANDLE_VALUE;
 using NativeFileHandle = int;
 inline constexpr NativeFileHandle kInvalidFileHandle = -1;
 #endif
+
+/// Offset, length and destination alignment that FileAccess::uncached requests must meet. 4 KiB covers
+/// the logical and physical sector sizes of current NVMe/SATA devices.
+inline constexpr std::size_t kUncachedAlignment = 4096;
+
+/** @brief How a registered file is read.
+ *
+ *  `uncached` opens the file with FILE_FLAG_NO_BUFFERING (Windows), O_DIRECT (Linux) or F_NOCACHE
+ *  (macOS). Each request against it must have a `source_offset` and a destination address that are
+ *  multiples of kUncachedAlignment, and a length that is too -- except a request that runs to the end
+ *  of the file, whose length may stop there. A request that breaks this is delivered
+ *  Status::invalid_argument, like an unknown SourceId.
+ *
+ *  @note On Windows, uncached reads of a file stop overlapping (each waits for the previous one) while
+ *  the same file also has a buffered handle or a mapping open, or had one moments ago: measured 2026-10-01
+ *  (docs/investigations/unbuffered-read-ceiling.md), 7 x 256 KiB took ~2.4 ms beside a held buffered
+ *  reader against ~0.6 ms alone. Give an uncached source a direct-only lifetime: read its metadata
+ *  through this mode too, and do not map it.
+ */
+enum class FileAccess : std::uint8_t { buffered, uncached };
 
 /// Bounded worker-pool sizing. `queue_capacity` is preallocated (R9/AGENTS.md sec 1): it IS the bound
 /// submit() enforces. `max_sources` bounds the registered-file table, also preallocated.
@@ -138,11 +157,13 @@ public:
      *  May block and allocate. Not safe to call concurrently with another register_file() naming the
      *  same `source`, nor with a submit() naming a `source` that is still mid-registration -- register
      *  every source the backend will serve before handing FillBackendRef(*this) to a pool/transfer set.
+     *  @param access buffered, or uncached with the alignment rules and lifetime note on FileAccess.
      *  @return ok; invalid_argument if `source` is already registered; ticket_exhausted if the
      *          registration table (sized by `max_sources`) is full; io_error if the file could not be
-     *          opened or sized.
+     *          opened or sized (including a filesystem that refuses uncached opens).
      */
-    [[nodiscard]] Status register_file(SourceId source, const std::filesystem::path& path);
+    [[nodiscard]] Status register_file(SourceId source, const std::filesystem::path& path,
+                                       FileAccess access = FileAccess::buffered);
 
     /// Backend contract (transfer.hpp FillBackendRef): see the file comment. `false` means only "the
     /// bounded queue is full or shutdown() has been called"; an unknown SourceId is still accepted.
@@ -158,19 +179,34 @@ private:
         SourceId source{};
         NativeFileHandle handle = kInvalidFileHandle;
         std::uint64_t size = 0;
+        FileAccess access = FileAccess::buffered;
     };
 
     struct WorkItem {
         FillRequest request;
         NativeFileHandle handle = kInvalidFileHandle;
+        std::uint64_t source_size = 0;
+        FileAccess access = FileAccess::buffered;
         bool source_known = false;
     };
 
+    /// What one worker thread owns for its reads. `event` (Windows only) is its manual-reset event: each
+    /// overlapped read waits on it rather than on the shared file handle. `tail` receives the last,
+    /// partial block of an uncached file, which cannot be read straight into a shorter destination.
+    struct WorkerScratch {
+        void* event = nullptr;
+        std::byte* tail = nullptr; // non-owning; kUncachedAlignment bytes, aligned
+    };
+
     void worker_loop();
-    /// `event` (Windows only) is the calling worker's own manual-reset event; each overlapped read
-    /// waits on it rather than on the shared file handle (see perform()).
-    void perform(WorkItem& item, void* event);
-    [[nodiscard]] NativeFileHandle find_source_locked(SourceId source) const noexcept;
+    void perform(WorkItem& item, const WorkerScratch& scratch);
+    /// Positional read of up to `length` bytes; stops early at EOF. Sets `status` to io_error on failure.
+    /// `access` uncached: a short count is end-of-file, since a retry would start mid-block and be refused.
+    [[nodiscard]] static std::uint64_t read_range(NativeFileHandle handle, void* event, FileAccess access,
+                                                  std::byte* destination, std::size_t length, std::uint64_t offset,
+                                                  Status& status) noexcept;
+    [[nodiscard]] static bool uncached_request_valid(const WorkItem& item) noexcept;
+    [[nodiscard]] const SourceEntry* find_source_locked(SourceId source) const noexcept;
     static void close_handle(NativeFileHandle handle) noexcept;
 
     std::vector<SourceEntry> sources_; ///< Reserved to max_sources at construction; append-only.
@@ -227,7 +263,8 @@ inline LocalFileBackend::~LocalFileBackend() {
     }
 }
 
-inline Status LocalFileBackend::register_file(SourceId source, const std::filesystem::path& path) {
+inline Status LocalFileBackend::register_file(SourceId source, const std::filesystem::path& path, FileAccess access) {
+    const bool uncached = access == FileAccess::uncached;
     NativeFileHandle handle = kInvalidFileHandle;
     std::uint64_t size = 0;
 #ifdef _WIN32
@@ -235,7 +272,7 @@ inline Status LocalFileBackend::register_file(SourceId source, const std::filesy
     // read this backend needs, safe under concurrent workers reading the same handle at different
     // offsets (a plain synchronous handle instead shares one implicit file pointer across threads).
     handle = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                            FILE_FLAG_OVERLAPPED, nullptr);
+                            FILE_FLAG_OVERLAPPED | (uncached ? FILE_FLAG_NO_BUFFERING : 0), nullptr);
     if (handle == kInvalidFileHandle) {
         return Status::io_error;
     }
@@ -246,10 +283,22 @@ inline Status LocalFileBackend::register_file(SourceId source, const std::filesy
     }
     size = static_cast<std::uint64_t>(large_size.QuadPart);
 #else
-    handle = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    int flags = O_RDONLY | O_CLOEXEC;
+#ifdef O_DIRECT
+    if (uncached) {
+        flags |= O_DIRECT;
+    }
+#endif
+    handle = ::open(path.c_str(), flags);
     if (handle == kInvalidFileHandle) {
         return Status::io_error;
     }
+#ifdef F_NOCACHE
+    if (uncached && ::fcntl(handle, F_NOCACHE, 1) != 0) {
+        close_handle(handle);
+        return Status::io_error;
+    }
+#endif
     struct stat info {};
     if (::fstat(handle, &info) != 0) {
         close_handle(handle);
@@ -270,17 +319,17 @@ inline Status LocalFileBackend::register_file(SourceId source, const std::filesy
         // status exists, and SlotPool already reuses it the same way for its own bounded record table.
         return Status::ticket_exhausted;
     }
-    sources_.push_back({.source = source, .handle = handle, .size = size});
+    sources_.push_back({.source = source, .handle = handle, .size = size, .access = access});
     return Status::ok;
 }
 
-inline NativeFileHandle LocalFileBackend::find_source_locked(SourceId source) const noexcept {
+inline const LocalFileBackend::SourceEntry* LocalFileBackend::find_source_locked(SourceId source) const noexcept {
     for (const SourceEntry& entry : sources_) {
         if (entry.source == source) {
-            return entry.handle;
+            return &entry;
         }
     }
-    return kInvalidFileHandle;
+    return nullptr;
 }
 
 inline bool LocalFileBackend::submit(const FillRequest& request) noexcept {
@@ -291,8 +340,11 @@ inline bool LocalFileBackend::submit(const FillRequest& request) noexcept {
     }
     WorkItem& item = ring_[(head_ + ring_size_) % ring_.size()];
     item.request = request;
-    item.handle = find_source_locked(request.source);
-    item.source_known = item.handle != kInvalidFileHandle;
+    const SourceEntry* const entry = find_source_locked(request.source);
+    item.source_known = entry != nullptr;
+    item.handle = entry ? entry->handle : kInvalidFileHandle;
+    item.source_size = entry ? entry->size : 0;
+    item.access = entry ? entry->access : FileAccess::buffered;
     ++ring_size_;
     ++stats_.accepted;
     stats_.queue_high_water = std::max(stats_.queue_high_water, static_cast<std::uint32_t>(ring_size_));
@@ -318,6 +370,8 @@ inline void LocalFileBackend::worker_loop() {
 #else
     void* const event = nullptr;
 #endif
+    alignas(kUncachedAlignment) std::byte tail[kUncachedAlignment];
+    const WorkerScratch scratch{.event = event, .tail = tail};
     for (;;) {
         WorkItem item;
         {
@@ -331,41 +385,41 @@ inline void LocalFileBackend::worker_loop() {
             --ring_size_;
             ++stats_.in_flight; // still under the lock: visible to stats() the instant this item starts
         }
-        perform(item, event);
+        perform(item, scratch);
     }
 }
 
-inline void LocalFileBackend::perform(WorkItem& item, [[maybe_unused]] void* event) {
-    if (!item.source_known) {
-        // Unknown SourceId, decided at submit() time; see the file comment. Never inline in submit().
-        item.request.sink.deliver(item.request.token, {.status = Status::invalid_argument, .bytes = 0});
-        const std::scoped_lock lock(mutex_);
-        ++stats_.errors;
-        --stats_.in_flight;
-        return;
-    }
+inline bool LocalFileBackend::uncached_request_valid(const WorkItem& item) noexcept {
+    const std::span<std::byte> destination = item.request.destination;
+    const bool to_end_of_file = item.request.source_offset + destination.size() >= item.source_size;
+    return item.request.source_offset % kUncachedAlignment == 0 &&
+           reinterpret_cast<std::uintptr_t>(destination.data()) % kUncachedAlignment == 0 &&
+           (destination.size() % kUncachedAlignment == 0 || to_end_of_file);
+}
 
+inline std::uint64_t LocalFileBackend::read_range(NativeFileHandle handle, [[maybe_unused]] void* event,
+                                                  FileAccess access, std::byte* destination, std::size_t length,
+                                                  std::uint64_t offset, Status& status) noexcept {
+    const bool short_is_eof = access == FileAccess::uncached;
     std::uint64_t total = 0;
-    Status status = Status::ok;
-    std::byte* dst = item.request.destination.data();
-    std::size_t remaining = item.request.destination.size();
-
+    std::size_t remaining = length;
 #ifdef _WIN32
     if (event == nullptr) {
         status = Status::io_error;
-        remaining = 0;
+        return 0;
     }
     while (remaining > 0) {
-        const std::uint64_t pos = item.request.source_offset + total;
+        const std::uint64_t pos = offset + total;
         OVERLAPPED overlapped{};
         overlapped.hEvent = static_cast<HANDLE>(event); // manual-reset; ReadFile resets it on entry
         overlapped.Offset = static_cast<DWORD>(pos & 0xFFFFFFFFull);
         overlapped.OffsetHigh = static_cast<DWORD>(pos >> 32);
-        const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(remaining, (std::numeric_limits<DWORD>::max)()));
-        const BOOL immediate = ::ReadFile(item.handle, dst + total, chunk, nullptr, &overlapped);
+        // Capped at 1 GiB, a multiple of kUncachedAlignment, so a split uncached read stays aligned.
+        const DWORD chunk = static_cast<DWORD>(std::min<std::size_t>(remaining, std::size_t{1} << 30));
+        const BOOL immediate = ::ReadFile(handle, destination + total, chunk, nullptr, &overlapped);
         if (!immediate && ::GetLastError() != ERROR_IO_PENDING) {
             if (::GetLastError() == ERROR_HANDLE_EOF) {
-                break; // EOF before the requested count: report what was actually read (see below)
+                break; // EOF before the requested count: report what was actually read
             }
             status = Status::io_error;
             break;
@@ -374,7 +428,7 @@ inline void LocalFileBackend::perform(WorkItem& item, [[maybe_unused]] void* eve
         // ReadFile completed synchronously or is still pending -- its own lpNumberOfBytesRead output
         // is not reliable for an overlapped handle (Win32 docs for ReadFile/GetOverlappedResult).
         DWORD read_now = 0;
-        if (!::GetOverlappedResult(item.handle, &overlapped, &read_now, /*bWait=*/TRUE)) {
+        if (!::GetOverlappedResult(handle, &overlapped, &read_now, /*bWait=*/TRUE)) {
             if (::GetLastError() == ERROR_HANDLE_EOF) {
                 break;
             }
@@ -386,11 +440,13 @@ inline void LocalFileBackend::perform(WorkItem& item, [[maybe_unused]] void* eve
         }
         total += read_now;
         remaining -= read_now;
+        if (short_is_eof && read_now < chunk) {
+            break;
+        }
     }
 #else
     while (remaining > 0) {
-        const auto pos = static_cast<off_t>(item.request.source_offset + total);
-        const ssize_t got = ::pread(item.handle, dst + total, remaining, pos);
+        const ssize_t got = ::pread(handle, destination + total, remaining, static_cast<off_t>(offset + total));
         if (got < 0) {
             if (errno == EINTR) {
                 continue; // retry the same offset/length, per the task's pread-loop contract
@@ -399,12 +455,44 @@ inline void LocalFileBackend::perform(WorkItem& item, [[maybe_unused]] void* eve
             break;
         }
         if (got == 0) {
-            break; // EOF before the requested count: report what was actually read (see below)
+            break; // EOF before the requested count: report what was actually read
         }
         total += static_cast<std::uint64_t>(got);
+        if (short_is_eof && static_cast<std::size_t>(got) < remaining) {
+            break;
+        }
         remaining -= static_cast<std::size_t>(got);
     }
 #endif
+    return total;
+}
+
+inline void LocalFileBackend::perform(WorkItem& item, const WorkerScratch& scratch) {
+    const bool uncached = item.access == FileAccess::uncached;
+    if (!item.source_known || (uncached && !uncached_request_valid(item))) {
+        // Unknown SourceId (decided at submit() time; see the file comment) or a misaligned uncached
+        // request (see FileAccess). Never inline in submit().
+        item.request.sink.deliver(item.request.token, {.status = Status::invalid_argument, .bytes = 0});
+        const std::scoped_lock lock(mutex_);
+        ++stats_.errors;
+        --stats_.in_flight;
+        return;
+    }
+
+    Status status = Status::ok;
+    std::byte* const dst = item.request.destination.data();
+    const std::size_t wanted = item.request.destination.size();
+    // An uncached read must be whole blocks: read those in place, then the file's last partial block
+    // through the worker's aligned scratch (only a request that runs to end-of-file has one).
+    const std::size_t in_place = uncached ? wanted / kUncachedAlignment * kUncachedAlignment : wanted;
+    std::uint64_t total = read_range(item.handle, scratch.event, item.access, dst, in_place, item.request.source_offset, status);
+    if (status == Status::ok && total == in_place && in_place < wanted) {
+        const std::uint64_t got = read_range(item.handle, scratch.event, item.access, scratch.tail, kUncachedAlignment,
+                                             item.request.source_offset + in_place, status);
+        const std::size_t tail = std::min<std::size_t>(static_cast<std::size_t>(got), wanted - in_place);
+        std::copy_n(scratch.tail, tail, dst + in_place);
+        total += tail;
+    }
 
     // Always report status=ok with the actual byte count, even on a short/EOF-clipped read, matching
     // tests/fake_backend.hpp's convention: transfer.hpp's detail::classify_fill (shared by SlotPool and

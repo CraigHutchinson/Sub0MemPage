@@ -360,3 +360,33 @@ in flight to replenish approximately depth 16 or higher; a lone seven-chunk miss
 has a different roof. Qualify the real engine's retained sidecar mapping and metadata-reader lifetime
 before promoting an uncached default. Success here is transfer-path evidence, not decode-throughput
 or mixed-access evidence, and Linux/WSL timings are not measurements of this physical NVMe.
+
+## Update 2026-10-06: `FileAccess::uncached` in LocalFileBackend (opt-in)
+
+`LocalFileBackend::register_file(source, path, FileAccess::uncached)` opens the file non-cached and
+serves aligned requests on the existing worker pool. A request that runs to end-of-file may stop
+mid-block; its last partial block goes through a per-worker aligned scratch. Buffered stays the default.
+The shootout arm `mempage-unbuffered` measures this library path.
+
+Direct-only session, real sidecar, cold, 100 misses x 3 rotated rounds, 7 x 256 KiB per 1,766,400-byte
+row, 2.8 ms busy gaps:
+
+| Arm | p50 us | p90 us |
+|---|---:|---:|
+| `iocp-unbuffered` | 483 | 579 |
+| **`mempage-unbuffered`** | **532** | **597** |
+| `pool-unbuffered` | 553 | 625 |
+| `inline-unbuffered` | 557 | 647 |
+
+Buffered `mempage`, cold, on the same file: 704 us p50 quiet, 836 us with DRAM saturated (~85 GB/s). A
+clean uncached run under the same DRAM load: 592 us p50, 902 us p90.
+
+**The cached-reader state lingers longer than two seconds.** Five consecutive direct-session runs
+alternated clean / serialized / clean / serialized / serialized, regardless of DRAM load (0, 2, 6, 12, 0
+load threads). In a serialized run the second arm, seconds after the setup canary's buffered read, took
+~2.3-2.8 ms per row, and the third recovered partway through. Budget on the order of ten seconds, and
+never rely on a sleep: a consumer of an uncached source must not read that file through the cache at
+all, including for its header and metadata.
+
+Open: whether another process's cached access (an indexer, a scanner) triggers the same state mid-run,
+and an IOCP issue path (~10% at this shape, above).

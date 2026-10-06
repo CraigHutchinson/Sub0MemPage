@@ -211,6 +211,102 @@ void test_unknown_source_reported_async() {
     check(backend->stats().errors == 1, "unknown-source delivery counted as an error");
 }
 
+// --- uncached access -----------------------------------------------------------------------------------
+
+/// A kUncachedAlignment-aligned view into over-allocated storage, with room for a guard byte after it.
+struct AlignedBuffer {
+    explicit AlignedBuffer(std::size_t size) : storage(size + 2 * kUncachedAlignment, std::byte{0xEE}) {
+        const auto address = reinterpret_cast<std::uintptr_t>(storage.data());
+        data = storage.data() + (kUncachedAlignment - address % kUncachedAlignment) % kUncachedAlignment;
+    }
+    std::vector<std::byte> storage;
+    std::byte* data = nullptr;
+};
+
+[[nodiscard]] FillResult read_now(LocalFileBackend& backend, std::uint64_t offset, std::span<std::byte> destination) {
+    DirectWaiter waiter;
+    const FillRequest request{.source = SourceId{1},
+                              .source_offset = offset,
+                              .destination = destination,
+                              .token = {0, 0},
+                              .sink = {&waiter, &DirectWaiter::deliver}};
+    check(backend.submit(request), "uncached submit accepted");
+    return waiter.wait();
+}
+
+void test_uncached_reads() {
+    TempDir dir;
+    const fs::path file = dir.path() / "u.bin";
+    constexpr std::uint64_t block = kUncachedAlignment;
+    constexpr std::uint64_t size = 3 * block + 1000; // ends mid-block, as real files do
+    write_file(file, size);
+
+    auto backend = std::move(*LocalFileBackend::create({.workers = 2, .queue_capacity = 8, .max_sources = 1}));
+    check(backend->register_file(SourceId{1}, file, FileAccess::uncached) == Status::ok,
+          "an uncached registration succeeds on this filesystem");
+
+    AlignedBuffer whole(2 * block);
+    FillResult result = read_now(*backend, block, {whole.data, 2 * block});
+    check(result.status == Status::ok && result.bytes == 2 * block, "aligned uncached read reports full success");
+    check(matches_oracle(file, {whole.data, 2 * block}, block), "aligned uncached bytes match the ifstream oracle");
+
+    // To end-of-file: one whole block in place, then 1,000 bytes of the last partial block.
+    const std::uint64_t tail_length = size - 2 * block;
+    AlignedBuffer tail(tail_length);
+    result = read_now(*backend, 2 * block, {tail.data, static_cast<std::size_t>(tail_length)});
+    check(result.status == Status::ok && result.bytes == tail_length, "a read to end-of-file may stop mid-block");
+    check(matches_oracle(file, {tail.data, static_cast<std::size_t>(tail_length)}, 2 * block),
+          "end-of-file bytes match the oracle, partial block included");
+    check(tail.data[tail_length] == std::byte{0xEE}, "the partial block does not overrun the destination");
+
+    AlignedBuffer bad(2 * block);
+    check(read_now(*backend, 17, {bad.data, block}).status == Status::invalid_argument, "misaligned offset refused");
+    check(read_now(*backend, 0, {bad.data + 1, block}).status == Status::invalid_argument,
+          "misaligned destination refused");
+    check(read_now(*backend, 0, {bad.data, 1000}).status == Status::invalid_argument,
+          "a partial-block length that does not reach end-of-file is refused");
+
+    result = read_now(*backend, 3 * block, {bad.data, block}); // aligned, but the file ends 1,000 bytes in
+    check(result.status == Status::ok && result.bytes == 1000, "an aligned read past end-of-file reports the short count");
+    const LocalFileBackendStats stats = backend->stats();
+    check(stats.errors == 3 && stats.completed_ok == 2 && stats.short_reads == 1, "stats tally uncached outcomes");
+}
+
+void test_uncached_transfer_set() {
+    TempDir dir;
+    const fs::path file = dir.path() / "ut.bin";
+    constexpr std::uint64_t block = kUncachedAlignment;
+    constexpr std::uint64_t size = 8 * block + 123;
+    write_file(file, size);
+    auto backend = std::move(*LocalFileBackend::create({.workers = 3, .queue_capacity = 8, .max_sources = 1}));
+    check(backend->register_file(SourceId{1}, file, FileAccess::uncached) == Status::ok, "uncached registration");
+
+    // One row filled as three chunks, as a consumer splits a miss: all aligned, the last to end-of-file.
+    AlignedBuffer row(static_cast<std::size_t>(size));
+    auto set = TransferSet::create({.source = SourceId{1},
+                                    .source_bytes = size,
+                                    .destination = {row.data, static_cast<std::size_t>(size)},
+                                    .max_claims = 4},
+                                   FillBackendRef(*backend));
+    check(set.has_value(), "transfer set over an aligned destination");
+    std::vector<Claim> claims;
+    for (const std::uint64_t at : {std::uint64_t{0}, 3 * block, 6 * block}) {
+        auto claim = (*set)->submit({at, std::min<std::uint64_t>(3 * block, size - at)}, at);
+        check(claim.has_value(), "chunk submitted");
+        if (claim) {
+            claims.push_back(std::move(*claim));
+        }
+    }
+    bool all_ok = true;
+    for (const Claim& claim : claims) {
+        all_ok = claim.wait() == Status::ok && all_ok;
+    }
+    check(all_ok, "every uncached chunk completes, the end-of-file one included");
+    check(matches_oracle(file, {row.data, static_cast<std::size_t>(size)}, 0), "the chunked row matches the oracle");
+    claims.clear();
+    check((*set)->drain() == Status::ok, "set drains");
+}
+
 // --- SlotPool end to end -----------------------------------------------------------------------------
 
 void test_slot_pool_end_to_end() {
@@ -551,6 +647,8 @@ int main() {
     run(test_registration, "test_registration");
     run(test_direct_submit_matches_oracle, "test_direct_submit_matches_oracle");
     run(test_unknown_source_reported_async, "test_unknown_source_reported_async");
+    run(test_uncached_reads, "test_uncached_reads");
+    run(test_uncached_transfer_set, "test_uncached_transfer_set");
     run(test_slot_pool_end_to_end, "test_slot_pool_end_to_end");
     run(test_truncated_file_never_resident, "test_truncated_file_never_resident");
     run(test_transfer_set_end_to_end, "test_transfer_set_end_to_end");

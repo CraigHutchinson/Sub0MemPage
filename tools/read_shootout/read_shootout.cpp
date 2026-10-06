@@ -585,16 +585,20 @@ private:
 /// The library as shipped: LocalFileBackend workers + a TransferSet over the slot pool, chunked.
 class MemPageRead final : public Strategy {
 public:
-    explicit MemPageRead(std::span<std::byte> slots) : slots_(slots) {}
-    std::string_view name() const override { return "mempage"; }
-    std::string_view what() const override { return "Sub0MemPage LocalFileBackend + TransferSet, chunked (as shipped)"; }
+    MemPageRead(std::span<std::byte> slots, bool unbuffered) : slots_(slots), unbuffered_(unbuffered) {}
+    std::string_view name() const override { return unbuffered_ ? "mempage-unbuffered" : "mempage"; }
+    std::string_view what() const override {
+        return unbuffered_ ? "Sub0MemPage LocalFileBackend (FileAccess::uncached) + TransferSet, chunked"
+                           : "Sub0MemPage LocalFileBackend + TransferSet, chunked (as shipped)";
+    }
     bool open(const Options& o) override {
         row_ = o.row_bytes;
-        chunk_ = std::max<std::size_t>(1, o.chunk_bytes);
-        const auto chunks = static_cast<std::uint32_t>((row_ + chunk_ - 1) / chunk_);
+        chunk_ = unbuffered_ ? std::max(kAlign, o.chunk_bytes / kAlign * kAlign) : std::max<std::size_t>(1, o.chunk_bytes);
+        const auto chunks = static_cast<std::uint32_t>((row_ + 2 * kAlign + chunk_ - 1) / chunk_);
         auto backend = sub0mempage::LocalFileBackend::create(
             {.workers = o.readers, .queue_capacity = chunks + 4, .max_sources = 1});
-        if (!backend || (*backend)->register_file(kSource, o.file) != sub0mempage::Status::ok) {
+        const auto access = unbuffered_ ? sub0mempage::FileAccess::uncached : sub0mempage::FileAccess::buffered;
+        if (!backend || (*backend)->register_file(kSource, o.file, access) != sub0mempage::Status::ok) {
             unavailable_ = "backend create/register failed";
             return false;
         }
@@ -614,16 +618,17 @@ public:
     }
     const std::byte* read(const Miss& m) override {
         const auto base = static_cast<std::uint64_t>(m.slot - slots_.data());
+        const Window w = unbuffered_ ? aligned_window(m.offset, row_) : Window{m.offset, row_, 0};
         claims_.clear();
-        for (std::size_t at = 0; at < row_; at += chunk_) {
-            auto claim = set_->submit({m.offset + at, std::min(chunk_, row_ - at)}, base + at);
+        for (std::size_t at = 0; at < w.length; at += chunk_) {
+            auto claim = set_->submit({w.offset + at, std::min(chunk_, w.length - at)}, base + at);
             if (!claim) return nullptr;
             claims_.push_back(std::move(*claim));
         }
         bool ok = true;
         for (auto& c : claims_) ok = c.wait() == sub0mempage::Status::ok && ok;
         claims_.clear();
-        return ok ? m.slot : nullptr;
+        return ok ? m.slot + w.head : nullptr;
     }
     void close() override {
         claims_.clear();
@@ -636,6 +641,7 @@ public:
 private:
     static constexpr auto kSource = static_cast<sub0mempage::SourceId>(1);
     std::span<std::byte> slots_;
+    bool unbuffered_;
     std::size_t chunk_ = 0;
     std::unique_ptr<sub0mempage::LocalFileBackend> backend_;
     std::unique_ptr<sub0mempage::TransferSet> set_;
@@ -901,7 +907,8 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     all.push_back(std::make_unique<IocpRead>());
 #endif
-    all.push_back(std::make_unique<MemPageRead>(std::span(slots, stride * kSlots)));
+    all.push_back(std::make_unique<MemPageRead>(std::span(slots, stride * kSlots), false));
+    all.push_back(std::make_unique<MemPageRead>(std::span(slots, stride * kSlots), true));
 #ifdef SHOOTOUT_HAS_IORING
     all.push_back(std::make_unique<IoRingRead>(false));
     all.push_back(std::make_unique<IoRingRead>(true));
