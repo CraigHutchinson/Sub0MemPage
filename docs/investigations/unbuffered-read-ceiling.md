@@ -1,9 +1,12 @@
 # Investigation: unbuffered reads plateau at ~3 GB/s on the development host
 
-Status: **cached-reader trigger reproduced; direct-session overlap fixed in diagnostics**, 2026-10-01.
-LocalFileBackend integration remains deliberately unchanged pending consumer lifetime qualification.
-Self-contained. Nothing from the session that found it is needed
-to pick it up.
+Status: **RESOLVED for the motivating consumer**, 2026-10-07. Cause: on Windows, non-cached reads of a
+file queue behind each other while that file has, or recently had, a cached reader. Remedy: a
+direct-only lifetime for the file. `LocalFileBackend` has an opt-in `FileAccess::uncached` mode
+(2026-10-06 update, at the end), and Sub0Llm's expert cache uses it by default: 7.85 tok/s against 7.60
+with buffered fills and 7.14 with reactive mmap, in deep regime 2 (Sub0Llm `docs/STORAGE_STACK_PLAN.md`).
+What is still open is listed under "Follow-ups" at the end. Read the sections in order for the history;
+the "Hypotheses" section (filter driver, device ceiling, BitLocker) was ruled out by DiskSpd.
 
 ## The problem
 
@@ -390,3 +393,19 @@ all, including for its header and metadata.
 
 Open: whether another process's cached access (an indexer, a scanner) triggers the same state mid-run,
 and an IOCP issue path (~10% at this shape, above).
+
+## Follow-ups (recorded 2026-10-07)
+
+- **Another process's cached access.** Does a scanner or indexer reading the file through the cache
+  mid-run put uncached reads back into the queued state? Untested. A test: run the direct-session
+  shootout while a second process reads 4 KiB of the file buffered every few seconds.
+- **How long the state lingers, and what ends it.** More than two seconds, on the order of ten; the
+  kernel-side cause (NTFS's handling of a non-cached read when a data section exists) is inferred from
+  the FastFat sample, not observed. An ETW trace would settle it; it needs elevation.
+- **An IOCP issue path for uncached sources.** `iocp-unbuffered` 483 us p50 against the worker pool's
+  532 us on a lone 7-chunk miss. Deeper queues (many independent misses) are where it should matter more.
+- **Linux and macOS numbers.** The mode builds and passes its tests on Linux (WSL2); WSL's timings
+  measure a virtual disk. macOS (`F_NOCACHE`) is unbuilt.
+- **Shootout arms not written:** Linux `io_uring`, large-page slots, a whole-row mode for the pool arms.
+- **Process:** `dev.py check`'s ARM stage is skipped on this host (no cross toolchain); `dev.py bench`'s
+  G-PERF gate failed on 2026-10-01 with identical library headers in both arms (noise, not investigated).
