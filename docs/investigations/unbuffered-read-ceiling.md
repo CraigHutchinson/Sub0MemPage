@@ -404,8 +404,9 @@ and an IOCP issue path (~10% at this shape, above).
   the FastFat sample, not observed. An ETW trace would settle it; it needs elevation.
 - **An IOCP issue path for uncached sources.** `iocp-unbuffered` 483 us p50 against the worker pool's
   532 us on a lone 7-chunk miss. Deeper queues (many independent misses) are where it should matter more.
-- **Linux and macOS numbers.** The mode builds and passes its tests on Linux (WSL2); WSL's timings
-  measure a virtual disk. macOS (`F_NOCACHE`) is unbuilt.
+- **Linux and macOS numbers.** The mode builds and passes its tests on Linux and macOS (`F_NOCACHE`) in
+  CI. Neither has a timing on real hardware: WSL2 measures a virtual disk.
 - **Shootout arms not written:** Linux `io_uring`, large-page slots, a whole-row mode for the pool arms.
-- **Process:** `dev.py check`'s ARM stage is skipped on this host (no cross toolchain); `dev.py bench`'s
-  G-PERF gate failed on 2026-10-01 with identical library headers in both arms (noise, not investigated).
+- **Process:** `dev.py check`'s ARM stage is skipped on this host (no cross toolchain), but CI's
+  `arm-qemu` job runs it and passes. `dev.py bench`'s G-PERF gate failed on 2026-10-01 with identical
+  library headers in both arms (noise, not investigated).
