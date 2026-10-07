@@ -125,6 +125,45 @@ struct DirectWaiter {
     }
 };
 
+/// A CompletionSink target that holds its worker inside deliver() until release(): a request that is
+/// in flight for exactly as long as the test wants, with no dependence on how long a read takes.
+struct GatedWaiter {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool entered = false;
+    bool released = false;
+    bool done = false;
+    FillResult result;
+
+    static void deliver(void* context, TransferToken, FillResult r) noexcept {
+        auto* self = static_cast<GatedWaiter*>(context);
+        std::unique_lock lock(self->mutex);
+        self->result = r;
+        self->entered = true;
+        self->cv.notify_all();
+        self->cv.wait(lock, [&] { return self->released; });
+        self->done = true;
+        self->cv.notify_all(); // under the lock, as DirectWaiter::deliver explains
+    }
+
+    void wait_entered() {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return entered; });
+    }
+
+    void release() {
+        const std::scoped_lock lock(mutex);
+        released = true;
+        cv.notify_all();
+    }
+
+    [[nodiscard]] FillResult wait() {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&] { return done; });
+        return result;
+    }
+};
+
 // --- registration ----------------------------------------------------------------------------------
 
 void test_registration() {
@@ -486,37 +525,29 @@ void test_queue_full_rejection() {
 
 void test_shutdown_with_queued_work() {
     TempDir dir;
-    const fs::path big_file = dir.path() / "shutdown_big.bin";
-    constexpr std::uint64_t big_size = 64ull * 1024 * 1024;
-    write_file(big_file, big_size, std::byte{0x11});
+    const fs::path occupier_file = dir.path() / "shutdown_occupier.bin";
+    write_file(occupier_file, 4096);
     const fs::path small_file = dir.path() / "shutdown_small.bin";
     write_file(small_file, 32);
 
     auto backend = std::move(*LocalFileBackend::create({.workers = 1, .queue_capacity = 4, .max_sources = 2}));
-    check(backend->register_file(SourceId{8}, big_file) == Status::ok, "big file registered");
+    check(backend->register_file(SourceId{8}, occupier_file) == Status::ok, "occupier file registered");
     check(backend->register_file(SourceId{10}, small_file) == Status::ok, "small file registered");
 
-    std::vector<std::byte> occupier_dest(static_cast<std::size_t>(big_size));
-    DirectWaiter occupier_waiter;
+    std::vector<std::byte> occupier_dest(4096);
+    GatedWaiter occupier_waiter;
     const FillRequest occupier{.source = SourceId{8},
                                .source_offset = 0,
                                .destination = occupier_dest,
                                .token = {0, 0},
-                               .sink = {&occupier_waiter, &DirectWaiter::deliver}};
+                               .sink = {&occupier_waiter, &GatedWaiter::deliver}};
     check(backend->submit(occupier), "occupier accepted");
 
-    // Wait (no sleep: a bounded yield-spin on the backend's own in_flight gauge, the same kind of
-    // condition SlotPool/TransferSet block on internally) until the sole worker has actually dequeued and
-    // started reading the occupier. Racing straight into shutdown() right after submit() is not safe to
-    // assume away: on a lightly-scheduled/low-core host the worker thread may not run at all between
-    // submit() and shutdown() unless something here actually yields to it, which would make the occupier
-    // itself still-queued and cancelled instead of completed -- the very distinction this test checks.
-    bool occupier_started = false;
-    for (int spins = 0; spins < 1'000'000 && !occupier_started; ++spins) {
-        occupier_started = backend->stats().in_flight != 0;
-        std::this_thread::yield();
-    }
-    check(occupier_started, "worker started reading the occupier before shutdown() is exercised");
+    // The sole worker is now held inside the occupier's delivery, still in flight, until released below.
+    // This used to poll in_flight while a 64 MiB read ran, which failed whenever the read finished between
+    // polls (macOS CI, 2026-10-07): how long a read takes is not something a test may depend on.
+    occupier_waiter.wait_entered();
+    check(backend->stats().in_flight == 1, "worker started reading the occupier before shutdown() is exercised");
 
     constexpr int queued_count = 3;
     std::array<DirectWaiter, queued_count> queued_waiters;
@@ -531,7 +562,15 @@ void test_shutdown_with_queued_work() {
         check(backend->submit(req), "queued request accepted while the sole worker is still busy");
     }
 
-    backend->shutdown(); // cancels the still-queued ones, lets the in-flight occupier finish, joins workers
+    // shutdown() cancels the still-queued ones, lets the in-flight occupier finish, then joins the worker.
+    // It cannot return while the occupier is held, so it runs on its own thread; the occupier is released
+    // only once every queued request has been cancelled, which proves the cancellations did not wait for it.
+    std::thread stopper([&] { backend->shutdown(); });
+    while (backend->stats().cancelled != queued_count) {
+        std::this_thread::yield(); // a shutdown() that never cancels fails by ctest's timeout, not by a guess
+    }
+    occupier_waiter.release();
+    stopper.join();
 
     check(occupier_waiter.wait().status == Status::ok, "in-flight request still completed normally");
     for (DirectWaiter& waiter : queued_waiters) {

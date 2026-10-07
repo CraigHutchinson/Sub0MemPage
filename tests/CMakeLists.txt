@@ -29,5 +29,7 @@ add_test(NAME sub0mempage.consumer-defaults
         "-DGENERATOR=${CMAKE_GENERATOR}"
         "-DCOMPILER=${CMAKE_CXX_COMPILER}"
         "-DCONFIG=$<CONFIG>"
+        "-DFLAGS=${CMAKE_CXX_FLAGS}"
+        "-DLINK_FLAGS=${CMAKE_EXE_LINKER_FLAGS}"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_consumer.cmake")
 set_tests_properties(sub0mempage.consumer-defaults PROPERTIES TIMEOUT 120)
